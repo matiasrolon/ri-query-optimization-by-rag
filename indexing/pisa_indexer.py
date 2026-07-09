@@ -9,6 +9,7 @@ import time
 
 import pyterrier as pt
 from pyterrier_pisa import PisaIndex
+from pyterrier.java import autoclass
 
 import config
 from indexing.base import print_stats
@@ -40,6 +41,8 @@ def _preprocess_for_pisa(sample: list[dict]) -> list[dict]:
     behaviour. PISA does not remove stopwords by default, so we preprocess
     the text to ensure a fair comparison.
 
+    Uses Terrier's Java classes (Tokeniser and Stopwords) via pyterrier.java.
+
     Parameters
     ----------
     sample : list[dict]
@@ -50,17 +53,27 @@ def _preprocess_for_pisa(sample: list[dict]) -> list[dict]:
     list[dict]
         Documents with stopwords removed from the 'text' field.
     """
-    tokenizer = pt.text.get_text_tokenizer()
-    stopword_processor = pt.text.get_text_stopword_processor()
+
+    StringReader = autoclass("java.io.StringReader")
+    Tokeniser = autoclass("org.terrier.indexing.tokenisation.Tokeniser")
+    Stopwords = autoclass("org.terrier.terms.Stopwords")
+
+    tokeniser = Tokeniser.getTokeniser()
+    stopwords = Stopwords(None)
 
     print("Aplicando preprocesamiento (eliminación de stopwords) a la muestra para PISA...")
     t0 = time.time()
 
     processed = []
     for doc in sample:
-        tokens = tokenizer.split(doc["text"])
-        filtered = stopword_processor.transform_document_tokens(tokens)
-        processed.append({"docno": doc["docno"], "text": " ".join(filtered)})
+        reader = StringReader(doc["text"])
+        token_stream = tokeniser.tokenise(reader)
+        tokens = []
+        while token_stream.hasNext():
+            tok = token_stream.next()
+            if tok is not None and not stopwords.isStopword(tok):
+                tokens.append(tok)
+        processed.append({"docno": doc["docno"], "text": " ".join(tokens)})
 
     print(f"Preprocesamiento completado en {time.time() - t0:.1f}s")
     return processed
@@ -87,7 +100,7 @@ def index(sample: list[dict], index_dir: str, threads: int) -> None:
     # ── Reuse existing index if available ──────────────────────────────────
     if _index_exists(pisa_path) and not config.FORCE_REINDEX:
         _load_existing(pisa_path)
-        return
+        returnº
 
     # ── Build new index ────────────────────────────────────────────────────
     if config.FORCE_REINDEX and os.path.exists(pisa_path):
