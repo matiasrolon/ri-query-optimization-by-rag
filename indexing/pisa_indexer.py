@@ -18,7 +18,7 @@ from indexing.base import print_stats
 def _index_exists(pisa_path: str) -> bool:
     """Check whether a valid PISA index already exists on disk."""
     # PisaIndex stores several files; check for the canonical 'inv.pisa' file.
-    return os.path.isfile(os.path.join(pisa_path, "inv.pisa"))
+    return os.path.isfile(os.path.join(pisa_path, "inv.docs"))
 
 
 def _load_existing(pisa_path: str) -> None:

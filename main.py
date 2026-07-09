@@ -29,7 +29,7 @@ def _index_already_exists(index_path: str) -> bool:
     if config.INDEXING_METHOD == "pyterrier":
         return os.path.isfile(os.path.join(index_path, "data.properties"))
     else:  # pisa
-        return os.path.isfile(os.path.join(index_path, "inv.pisa"))
+        return os.path.isfile(os.path.join(index_path, "inv.docs"))
 
 
 def main() -> None:
