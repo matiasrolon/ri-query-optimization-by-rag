@@ -21,12 +21,17 @@ if INDEXING_METHOD not in ("pyterrier", "pisa"):
 
 # ─── Paths ─────────────────────────────────────────────────────────────────────
 DATA_DIR = os.getenv("DATA_DIR", "./data")
-INDEX_DIR = os.getenv("INDEX_DIR", os.path.join(DATA_DIR, "index"))
+OUTPUT_DIR = os.getenv("OUTPUT_DIR", "./output")
+INDEX_DIR = os.getenv("INDEX_DIR", os.path.join(OUTPUT_DIR, "index"))
 
 # Dataset files (relative to DATA_DIR)
 COLLECTION_FILE = os.path.join(DATA_DIR, "collection.tsv")
 QUERIES_DIR = os.path.join(DATA_DIR, "queries")
 QRELS_FILE = os.path.join(DATA_DIR, "qrels.dev.tsv")
+
+# ─── Ensure required directories exist ─────────────────────────────────────────
+for _dir in (DATA_DIR, OUTPUT_DIR, INDEX_DIR, QUERIES_DIR):
+    os.makedirs(_dir, exist_ok=True)
 
 # ─── Dataset parameters ───────────────────────────────────────────────────────
 TOTAL_PASSAGES = 8_841_823  # Total passages in MS MARCO passage collection

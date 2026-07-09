@@ -43,9 +43,6 @@ def main() -> None:
         print("⚠  FORCE_REINDEX activado — se re-construirá el índice.")
     print("-" * 50)
 
-    # Ensure index output directory exists
-    os.makedirs(config.INDEX_DIR, exist_ok=True)
-
     # Determine if we can skip loading the dataset
     index_path = _resolve_index_path()
     need_indexing = config.FORCE_REINDEX or not _index_already_exists(index_path)
