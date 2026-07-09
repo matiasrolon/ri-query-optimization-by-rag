@@ -1,0 +1,6 @@
+python-terrier
+pyterrier_pisa
+ir_datasets
+tbb==2020.3.254
+pandas
+python-dotenv
