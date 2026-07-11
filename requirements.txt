@@ -4,3 +4,4 @@ ir_datasets
 tbb==2020.3.254
 pandas
 python-dotenv
+openai

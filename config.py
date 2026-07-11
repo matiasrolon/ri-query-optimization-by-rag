@@ -39,6 +39,16 @@ TOTAL_PASSAGES = 8_841_823  # Total passages in MS MARCO passage collection
 SAMPLE_FRACTION = float(os.getenv("SAMPLE_FRACTION", "1.0"))
 SAMPLE_SIZE = int(TOTAL_PASSAGES * SAMPLE_FRACTION)
 
+# ─── Feedback parameters (query expansion) ─────────────────────────────────────
+FEEDBACK_DOCS = int(os.getenv("FEEDBACK_DOCS", "10"))
+FEEDBACK_TERMS = int(os.getenv("FEEDBACK_TERMS", "10"))
+FEEDBACK_LAMBDA = float(os.getenv("FEEDBACK_LAMBDA", "0.6"))
+
+# ─── LLM settings (RAG query expansion) ────────────────────────────────────────
+# Default: Ollama local con qwen2.5:7b
+LLM_MODEL = os.getenv("LLM_MODEL", "qwen2.5:7b")
+LLM_BASE_URL = os.getenv("LLM_BASE_URL", "http://localhost:11434/v1")
+
 # ─── System ────────────────────────────────────────────────────────────────────
 THREADS = os.cpu_count()
 
