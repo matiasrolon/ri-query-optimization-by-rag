@@ -14,22 +14,11 @@ Usage:
 """
 
 import os
+
 import pyterrier as pt
+
 import config
-
-
-def _resolve_index_path() -> str:
-    """Return the expected index sub-directory for the current method."""
-    suffix = "idx_terrier" if config.INDEXING_METHOD == "pyterrier" else "idx_pisa"
-    return os.path.join(config.INDEX_DIR, suffix)
-
-
-def _index_already_exists(index_path: str) -> bool:
-    """Check if an index already exists on disk (method-specific heuristic)."""
-    if config.INDEXING_METHOD == "pyterrier":
-        return os.path.isfile(os.path.join(index_path, "data.properties"))
-    else:  # pisa
-        return os.path.isfile(os.path.join(index_path, "inv.docs"))
+from indexing import get_indexer
 
 
 def main() -> None:
@@ -43,25 +32,16 @@ def main() -> None:
         print("⚠  FORCE_REINDEX activado — se re-construirá el índice.")
     print("-" * 50)
 
-    # Determine if we can skip loading the dataset
-    index_path = _resolve_index_path()
-    need_indexing = config.FORCE_REINDEX or not _index_already_exists(index_path)
+    indexer = get_indexer()
 
-    if need_indexing:
-        # Load collection from local TSV file
-        from indexing.dataset import load_collection
-        sample = load_collection()
+    if indexer.index_exists() and not config.FORCE_REINDEX:
+        indexer.load_index()
     else:
-        print("Índice existente detectado en disco — omitiendo carga del dataset.")
-        sample = []  # Won't be used; the indexer will load from disk
+        # Only load the dataset when we actually need to build
+        from indexing.dataset import load_collection
 
-    # Dispatch to the configured indexer
-    if config.INDEXING_METHOD == "pyterrier":
-        from indexing.pyterrier_indexer import index
-    elif config.INDEXING_METHOD == "pisa":
-        from indexing.pisa_indexer import index
-
-    index(sample, config.INDEX_DIR, config.THREADS)
+        sample = load_collection()
+        indexer.build_index(sample, config.THREADS)
 
     print("\n" + "=" * 50)
     print("Indexación completada.")
