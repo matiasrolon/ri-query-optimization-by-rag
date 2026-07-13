@@ -47,6 +47,7 @@ _SYSTEM_PROMPT = textwrap.dedent("""\
     - Output ONLY the improved query, nothing else.
     - Do NOT include explanations, numbering, or bullet points.
     - Keep the query concise (no more than ~30 words).
+    - Do NOT rewrite the query; only provide terms to ADD.
     - Use English unless the original query is in another language.
 """)
 
