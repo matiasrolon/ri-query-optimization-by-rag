@@ -220,13 +220,34 @@ class RAGExpander:
             Retrieval results from the second pass with the
             reformulated query.
         """
+        _, results = self.expand_and_search(query)
+        return results
+
+    def expand_and_search(self, query: str) -> tuple[str, pd.DataFrame]:
+        """
+        Expand the query and run the second-pass retrieval in one call.
+
+        Useful when the caller needs both the expanded query text
+        (e.g. for metric logging) and the retrieval results without
+        invoking the LLM twice.
+
+        Parameters
+        ----------
+        query : str
+            The original user query.
+
+        Returns
+        -------
+        tuple[str, pd.DataFrame]
+            A tuple of (expanded_query, search_results).
+        """
         reformulated = self.expand(query)
 
         t0 = time.time()
         results = self._second_pass.search(reformulated)
         print(f"  ⏱  Second-pass retrieval: {time.time() - t0:.3f}s")
 
-        return results
+        return reformulated, results
 
     def search_batch(self, topics: pd.DataFrame) -> pd.DataFrame:
         """

@@ -209,8 +209,29 @@ class PRFExpander:
             query.  Columns include ``qid``, ``docno``, ``score``,
             ``rank``.
         """
+        _, results = self.expand_and_search(query)
+        return results
+
+    def expand_and_search(self, query: str) -> tuple[str, pd.DataFrame]:
+        """
+        Expand the query and run the second-pass retrieval in one call.
+
+        Useful when the caller needs both the expanded query text
+        (e.g. for metric logging) and the retrieval results without
+        running the expansion pipeline twice.
+
+        Parameters
+        ----------
+        query : str
+            The original user query.
+
+        Returns
+        -------
+        tuple[str, pd.DataFrame]
+            A tuple of (expanded_query, search_results).
+        """
         expanded_query = self.expand(query)
-        return self._second_pass.search(expanded_query)
+        return expanded_query, self._second_pass.search(expanded_query)
 
     def search_batch(self, topics: pd.DataFrame) -> pd.DataFrame:
         """

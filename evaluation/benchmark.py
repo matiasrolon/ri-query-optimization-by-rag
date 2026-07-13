@@ -8,8 +8,7 @@ from ``qrels.dev.tsv``, then runs both expansion strategies measuring:
   - MRR (Mean Reciprocal Rank) per query.
 
 Results are exported to a CSV with the following schema:
-    queryid, metodo, cant_terminos_original, cant_terminos_expandida,
-    tiempo_resolucion, mrr
+    queryid, method, q_terms_original, q_terms_expanded, time_seconds, mrr
 """
 
 from __future__ import annotations
@@ -125,18 +124,17 @@ def run_prf_benchmark(
         print(f"  [{i}/{total}] PRF  qid={qid}: \"{original_query}\"")
 
         t0 = time.time()
-        expanded_query = expander.expand(original_query)
-        search_results = expander._second_pass.search(expanded_query)
+        expanded_query, search_results = expander.expand_and_search(original_query)
         elapsed = time.time() - t0
 
         mrr = compute_mrr(search_results, relevant)
 
         results_list.append({
             "queryid": qid,
-            "metodo": "prf",
-            "cant_terminos_original": count_terms(original_query),
-            "cant_terminos_expandida": count_terms(expanded_query),
-            "tiempo_resolucion": round(elapsed, 4),
+            "method": "prf",
+            "q_terms_original": count_terms(original_query),
+            "q_terms_expanded": count_terms(expanded_query),
+            "time_seconds": round(elapsed, 4),
             "mrr": round(mrr, 6),
         })
 
@@ -168,18 +166,17 @@ def run_rag_benchmark(
         print(f"  [{i}/{total}] RAG  qid={qid}: \"{original_query}\"")
 
         t0 = time.time()
-        expanded_query = expander.expand(original_query)
-        search_results = expander._second_pass.search(expanded_query)
+        expanded_query, search_results = expander.expand_and_search(original_query)
         elapsed = time.time() - t0
 
         mrr = compute_mrr(search_results, relevant)
 
         results_list.append({
             "queryid": qid,
-            "metodo": "rag",
-            "cant_terminos_original": count_terms(original_query),
-            "cant_terminos_expandida": count_terms(expanded_query),
-            "tiempo_resolucion": round(elapsed, 4),
+            "method": "rag",
+            "q_terms_original": count_terms(original_query),
+            "q_terms_expanded": count_terms(expanded_query),
+            "time_seconds": round(elapsed, 4),
             "mrr": round(mrr, 6),
         })
 
@@ -215,10 +212,10 @@ def export_results(
 
     fieldnames = [
         "queryid",
-        "metodo",
-        "cant_terminos_original",
-        "cant_terminos_expandida",
-        "tiempo_resolucion",
+        "method",
+        "q_terms_original",
+        "q_terms_expanded",
+        "time_seconds",
         "mrr",
     ]
 
