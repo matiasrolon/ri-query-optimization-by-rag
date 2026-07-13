@@ -20,6 +20,7 @@ Reference:
 from __future__ import annotations
 
 import os
+import re
 import time
 import textwrap
 
@@ -82,6 +83,10 @@ class RAGExpander:
     api_key : str | None
         API key.  When *None*, read from the ``OPENAI_API_KEY``
         environment variable.  Not required for local Ollama.
+    verbose : bool
+        If *True* (default), print the full LLM prompt, retrieved
+        passages, and per-step timing to stdout.  Set to *False*
+        when running batch evaluations to reduce noise.
     max_tokens : int
         Maximum number of tokens in the LLM response.
     temperature : float
@@ -97,6 +102,7 @@ class RAGExpander:
         model: str | None = None,
         base_url: str | None = None,
         api_key: str | None = None,
+        verbose: bool = True,
         max_tokens: int = _DEFAULT_MAX_TOKENS,
         temperature: float = _DEFAULT_TEMPERATURE,
     ) -> None:
@@ -108,6 +114,7 @@ class RAGExpander:
         self.model = model if model is not None else config.LLM_MODEL
         self.max_tokens = max_tokens
         self.temperature = temperature
+        self.verbose = verbose
 
         resolved_base_url = base_url if base_url is not None else config.LLM_BASE_URL
         # Ollama doesn't need an API key; use 'ollama' as a dummy value
@@ -122,6 +129,19 @@ class RAGExpander:
         self._indexer = indexer or get_indexer()
         self._first_pass = self._indexer.bm25_retriever(num_results=self.fb_docs)
         self._second_pass = self._indexer.bm25_retriever()
+
+    # ── Query sanitisation ────────────────────────────────────────────────
+
+    _TERRIER_SPECIAL_RE = re.compile(r'[/+\-!(){}\[\]:^~\\"\']')
+
+    @classmethod
+    def _sanitize_query(cls, text: str) -> str:
+        """
+        Strip TerrierQL-special characters from a query string so that
+        the Terrier query parser does not raise a lexical error.
+        """
+        cleaned = cls._TERRIER_SPECIAL_RE.sub(" ", text)
+        return " ".join(cleaned.split())  # collapse whitespace
 
     # ── LLM interaction ───────────────────────────────────────────────────
 
@@ -142,10 +162,11 @@ class RAGExpander:
         """Call the LLM to reformulate the query."""
         user_prompt = self._build_user_prompt(original_query, passages)
 
-        print("  ┌─ Prompt enviado al LLM ────────────────────────────")
-        print(f"  │ [system] {_SYSTEM_PROMPT}...")
-        print(f"  │ [user]   {user_prompt}...")
-        print("  └────────────────────────────────────────────────────")
+        if self.verbose:
+            print("  ┌─ Prompt enviado al LLM ────────────────────────────")
+            print(f"  │ [system] {_SYSTEM_PROMPT}...")
+            print(f"  │ [user]   {user_prompt}...")
+            print("  └────────────────────────────────────────────────────")
 
         response = self._client.chat.completions.create(
             model=self.model,
@@ -182,10 +203,12 @@ class RAGExpander:
         str
             The LLM-reformulated query string.
         """
-        # 1. First-pass retrieval
+        # 1. First-pass retrieval (sanitise to avoid TerrierQL parse errors)
         t0 = time.time()
-        first_results = self._first_pass.search(query)
-        print(f"  ⏱  First-pass retrieval : {time.time() - t0:.3f}s")
+        safe_query = self._sanitize_query(query)
+        first_results = self._first_pass.search(safe_query)
+        if self.verbose:
+            print(f"  ⏱  First-pass retrieval : {time.time() - t0:.3f}s")
 
         if first_results.empty:
             return query
@@ -200,8 +223,9 @@ class RAGExpander:
         # 3. Ask the LLM to reformulate the query
         t0 = time.time()
         reformulated = self._call_llm(query, passages)
-        print(f"  ⏱  Llamada al LLM      : {time.time() - t0:.3f}s")
-        print(f"  📝 Query expandida      : \"{reformulated}\"")
+        if self.verbose:
+            print(f"  ⏱  Llamada al LLM      : {time.time() - t0:.3f}s")
+            print(f"  📝 Query expandida      : \"{reformulated}\"")
 
         return reformulated
 
@@ -244,8 +268,10 @@ class RAGExpander:
         reformulated = self.expand(query)
 
         t0 = time.time()
-        results = self._second_pass.search(reformulated)
-        print(f"  ⏱  Second-pass retrieval: {time.time() - t0:.3f}s")
+        safe_reformulated = self._sanitize_query(reformulated)
+        results = self._second_pass.search(safe_reformulated)
+        if self.verbose:
+            print(f"  ⏱  Second-pass retrieval: {time.time() - t0:.3f}s")
 
         return reformulated, results
 
@@ -267,7 +293,7 @@ class RAGExpander:
         all_results = []
         for _, row in topics.iterrows():
             reformulated = self.expand(row["query"])
-            result = self._second_pass.search(reformulated)
+            result = self._second_pass.search(self._sanitize_query(reformulated))
             result["qid"] = row["qid"]
             all_results.append(result)
 

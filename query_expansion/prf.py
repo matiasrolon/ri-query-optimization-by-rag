@@ -20,6 +20,7 @@ Reference:
 from __future__ import annotations
 
 import math
+import re
 from collections import Counter
 
 import pandas as pd
@@ -68,6 +69,25 @@ class PRFExpander:
         self._indexer = indexer or get_indexer()
         self._first_pass = self._indexer.bm25_retriever(num_results=self.fb_docs)
         self._second_pass = self._indexer.bm25_retriever()
+
+    # ── Query sanitisation ────────────────────────────────────────────────
+
+    # Characters that are special / reserved in TerrierQL and must be
+    # removed from individual query terms before they are sent to the
+    # Terrier query parser.
+    _TERRIER_SPECIAL_RE = re.compile(r'[/+\-!(){}\[\]:^~\\"\']')
+
+    @classmethod
+    def _sanitize_query(cls, text: str) -> list[str]:
+        """
+        Sanitise raw query text for safe use with TerrierQL.
+
+        Replaces every special character with a space so that compound
+        tokens like ``pools/swim`` become two separate tokens
+        ``["pools", "swim"]``.  Empty tokens are dropped.
+        """
+        cleaned = cls._TERRIER_SPECIAL_RE.sub(" ", text)
+        return [t for t in cleaned.lower().split() if t]
 
     # ── Term scoring (Bo1 – Bose-Einstein 1) ──────────────────────────────
 
@@ -148,14 +168,17 @@ class PRFExpander:
         parts: list[str] = []
 
         # Original query terms with weight fb_lambda
-        for token in original_query.lower().split():
+        for token in self._sanitize_query(original_query):
             parts.append(f"{token}^{self.fb_lambda:.4f}")
 
         # Expansion terms with weight (1 - fb_lambda) * normalised_score
         expansion_weight = 1.0 - self.fb_lambda
         for term, score in scored_terms:
-            w = expansion_weight * (score / max_w)
-            parts.append(f"{term}^{w:.4f}")
+            # Sanitise expansion terms too (they come from document text)
+            clean_tokens = self._sanitize_query(term)
+            for ct in clean_tokens:
+                w = expansion_weight * (score / max_w)
+                parts.append(f"{ct}^{w:.4f}")
 
         return " ".join(parts)
 
@@ -175,8 +198,9 @@ class PRFExpander:
         str
             The expanded (weighted) query string.
         """
-        # 1. First-pass retrieval
-        first_results = self._first_pass.search(query)
+        # 1. First-pass retrieval (sanitise to avoid TerrierQL parse errors)
+        safe_query = " ".join(self._sanitize_query(query))
+        first_results = self._first_pass.search(safe_query)
 
         if first_results.empty:
             return query

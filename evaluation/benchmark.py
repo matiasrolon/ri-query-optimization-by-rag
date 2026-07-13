@@ -154,7 +154,7 @@ def run_rag_benchmark(
 
     Returns a list of dicts, one per query, ready for CSV export.
     """
-    expander = RAGExpander(indexer=indexer)
+    expander = RAGExpander(indexer=indexer, verbose=False)
     results_list: list[dict] = []
     total = len(queries)
 
