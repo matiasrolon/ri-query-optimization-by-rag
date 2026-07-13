@@ -11,7 +11,6 @@ import time
 
 import pyterrier as pt
 from pyterrier_pisa import PisaIndex
-from pyterrier.java import autoclass
 
 import config
 from indexing.base import BaseIndexer, print_stats
@@ -56,14 +55,12 @@ class PisaIndexer(BaseIndexer):
             print("FORCE_REINDEX activado — eliminando índice anterior...")
             shutil.rmtree(self.index_path)
 
-        processed_sample = self._preprocess_for_pisa(sample)
-
         self._pisa_index = PisaIndex(
-            self.index_path, stemmer="porter2", threads=threads
+            self.index_path, stemmer="porter2", stops="terrier", threads=threads
         )
 
         t0 = time.time()
-        self._pisa_index.index(processed_sample)
+        self._pisa_index.index(sample)
         elapsed = time.time() - t0
 
         print_stats(
@@ -75,54 +72,6 @@ class PisaIndexer(BaseIndexer):
             sample_size=len(sample),
         )
 
-    # ── Preprocessing ─────────────────────────────────────────────────────
-
-    @staticmethod
-    def _preprocess_for_pisa(sample: list[dict]) -> list[dict]:
-        """
-        Apply tokenisation and stopword removal to match Terrier's default
-        behaviour.  PISA does not remove stopwords by default, so we
-        preprocess the text to ensure a fair comparison.
-
-        Uses Terrier's Java classes (Tokeniser and Stopwords) via
-        pyterrier.java.
-
-        Parameters
-        ----------
-        sample : list[dict]
-            Original documents with 'docno' and 'text' keys.
-
-        Returns
-        -------
-        list[dict]
-            Documents with stopwords removed from the 'text' field.
-        """
-        StringReader = autoclass("java.io.StringReader")
-        Tokeniser = autoclass("org.terrier.indexing.tokenisation.Tokeniser")
-        Stopwords = autoclass("org.terrier.terms.Stopwords")
-
-        tokeniser = Tokeniser.getTokeniser()
-        stopwords = Stopwords(None)
-
-        print(
-            "Aplicando preprocesamiento (eliminación de stopwords) "
-            "a la muestra para PISA..."
-        )
-        t0 = time.time()
-
-        processed = []
-        for doc in sample:
-            reader = StringReader(doc["text"])
-            token_stream = tokeniser.tokenise(reader)
-            tokens = []
-            while token_stream.hasNext():
-                tok = token_stream.next()
-                if tok is not None and not stopwords.isStopword(tok):
-                    tokens.append(tok)
-            processed.append({"docno": doc["docno"], "text": " ".join(tokens)})
-
-        print(f"Preprocesamiento completado en {time.time() - t0:.1f}s")
-        return processed
 
     # ── Retrieval ─────────────────────────────────────────────────────────
 
