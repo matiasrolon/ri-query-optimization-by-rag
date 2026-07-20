@@ -16,6 +16,7 @@ from __future__ import annotations
 import csv
 import os
 import time
+from datetime import datetime
 
 import pandas as pd
 import pyterrier as pt
@@ -207,7 +208,11 @@ def export_results(
     str
         The absolute path of the written CSV file.
     """
-    output_path = output_path or os.path.join(config.OUTPUT_DIR, "benchmark_results.csv")
+    if output_path is None:
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        output_path = os.path.join(
+            config.OUTPUT_DIR, f"benchmark_results_{timestamp}.csv"
+        )
     os.makedirs(os.path.dirname(output_path), exist_ok=True)
 
     fieldnames = [
@@ -234,6 +239,7 @@ def run_benchmark(
     qrels_path: str | None = None,
     output_path: str | None = None,
     max_queries: int | None = None,
+    offset: int = 0,
 ) -> str:
     """
     Run the full benchmark: PRF + RAG over dev queries, export to CSV.
@@ -247,8 +253,12 @@ def run_benchmark(
     output_path : str | None
         Path for the output CSV.
     max_queries : int | None
-        If set, limit the evaluation to the first N queries (useful for
-        testing / debugging).
+        If set, limit the evaluation to N queries (useful for
+        testing / debugging or multi-pass runs).
+    offset : int
+        Number of queries to skip from the beginning (default 0). Applied
+        after filtering for queries with qrels. Allows multi-pass execution
+        over large query sets.
 
     Returns
     -------
@@ -268,12 +278,22 @@ def run_benchmark(
 
     # Filter to only queries that have qrels (to compute meaningful MRR)
     queries_with_qrels = queries[queries["qid"].isin(qrels.keys())]
+    total_with_qrels = len(queries_with_qrels)
     print(f"   Queries totales    : {len(queries):,}")
-    print(f"   Queries con qrels  : {len(queries_with_qrels):,}")
+    print(f"   Queries con qrels  : {total_with_qrels:,}")
 
+    # Apply offset
+    if offset > 0:
+        queries_with_qrels = queries_with_qrels.iloc[offset:]
+        print(f"   Offset             : {offset}")
+
+    # Apply limit
     if max_queries is not None:
         queries_with_qrels = queries_with_qrels.head(max_queries)
         print(f"   Limitado a         : {max_queries}")
+
+    print(f"   Queries a evaluar  : {len(queries_with_qrels):,}"
+          f"  (rango {offset}–{offset + len(queries_with_qrels) - 1}")
 
     print()
 

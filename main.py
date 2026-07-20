@@ -9,8 +9,9 @@ Main entry point — MS MARCO passage indexing & query expansion benchmark.
 3. Exports combined results to ``output/benchmark_results.csv``.
 
 Usage:
-    python main.py                  # full benchmark (all queries with qrels)
-    python main.py --max-queries 50 # limit to first N queries for testing
+    python main.py                              # full benchmark
+    python main.py --max-queries 50              # first 50 queries
+    python main.py --offset 100 --max-queries 50 # queries 100–149
 """
 
 import argparse
@@ -39,11 +40,14 @@ def ensure_index() -> None:
     print("Indexación completada.")
 
 
-def run_evaluation(max_queries: int | None = None) -> None:
+def run_evaluation(
+    max_queries: int | None = None,
+    offset: int = 0,
+) -> None:
     """Run PRF + RAG benchmarks and export CSV."""
     from evaluation.benchmark import run_benchmark
 
-    csv_path = run_benchmark(max_queries=max_queries)
+    csv_path = run_benchmark(max_queries=max_queries, offset=offset)
     print(f"\n📄 Resultados guardados en: {csv_path}")
 
 
@@ -55,7 +59,13 @@ def main() -> None:
         "--max-queries",
         type=int,
         default=None,
-        help="Limitar la evaluación a las primeras N queries (para testing).",
+        help="Limitar la evaluación a N queries (para testing o ejecución por pasadas).",
+    )
+    parser.add_argument(
+        "--offset",
+        type=int,
+        default=0,
+        help="Saltar las primeras N queries (para ejecución por pasadas).",
     )
     args = parser.parse_args()
 
@@ -74,7 +84,7 @@ def main() -> None:
 
     # Step 2: Run benchmarks
     print()
-    run_evaluation(max_queries=args.max_queries)
+    run_evaluation(max_queries=args.max_queries, offset=args.offset)
 
 
 if __name__ == "__main__":

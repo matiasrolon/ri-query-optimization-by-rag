@@ -97,6 +97,8 @@ cp .env.example .env
 
 Editar `.env` según sea necesario. Las variables disponibles son:
 
+**Indexación y rutas:**
+
 | Variable | Descripción | Valor por defecto |
 |---|---|---|
 | `INDEXING_METHOD` | Método de indexación (`pyterrier` o `pisa`) | `pyterrier` |
@@ -106,6 +108,22 @@ Editar `.env` según sea necesario. Las variables disponibles son:
 | `SAMPLE_FRACTION` | Fracción de la colección a indexar (0.0 - 1.0) | `1.0` |
 | `FORCE_REINDEX` | Forzar re-indexación aunque ya exista un índice (`true`/`false`) | `false` |
 
+**Parámetros de feedback (query expansion PRF y RAG):**
+
+| Variable | Descripción | Valor por defecto |
+|---|---|---|
+| `FEEDBACK_DOCS` | Cantidad de documentos usados como feedback para la expansión | `10` |
+| `FEEDBACK_TERMS` | Cantidad de términos extraídos del feedback para expandir la query | `10` |
+| `FEEDBACK_LAMBDA` | Peso de interpolación entre la query original y los términos de expansión (0.0 - 1.0) | `0.6` |
+
+**Configuración del LLM (expansión RAG):**
+
+| Variable | Descripción | Valor por defecto |
+|---|---|---|
+| `LLM_MODEL` | Modelo de lenguaje a utilizar (compatible con API OpenAI) | `qwen2.5:7b` |
+| `LLM_BASE_URL` | URL base del servidor LLM (Ollama local u otro proveedor) | `http://localhost:11434/v1` |
+| `OPENAI_API_KEY` | API key para el proveedor LLM (dejar vacío para Ollama local) | *(vacío)* |
+
 ## Uso
 
 ```bash
@@ -113,3 +131,31 @@ python main.py
 ```
 
 El programa detecta automáticamente si ya existe un índice construido en disco. Si existe, se reutiliza (a menos que `FORCE_REINDEX=true`).
+
+### Parámetros opcionales
+
+El script acepta los siguientes argumentos de línea de comandos para controlar la ejecución del benchmark:
+
+| Parámetro | Descripción | Valor por defecto |
+|---|---|---|
+| `--max-queries N` | Limitar la evaluación a las primeras N queries (útil para testing o ejecución por pasadas) | *(todas)* |
+| `--offset N` | Saltar las primeras N queries antes de comenzar la evaluación | `0` |
+
+**Ejemplos:**
+
+```bash
+# Ejecutar el benchmark completo
+python main.py
+
+# Evaluar solo las primeras 50 queries
+python main.py --max-queries 50
+
+# Evaluar queries 100 a 149 (útil para ejecución incremental)
+python main.py --offset 100 --max-queries 50
+
+# Procesar 4000 queries desde el inicio
+python main.py --max-queries 4000 --offset 0
+```
+
+> [!TIP]
+> Para datasets muy grandes (100k+ queries), se recomienda ejecutar el benchmark en pasadas incrementales usando `--offset` y `--max-queries`. Los resultados se exportan con timestamp en el nombre del archivo para evitar sobreescrituras.

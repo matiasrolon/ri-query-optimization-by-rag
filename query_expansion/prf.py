@@ -75,7 +75,7 @@ class PRFExpander:
     # Characters that are special / reserved in TerrierQL and must be
     # removed from individual query terms before they are sent to the
     # Terrier query parser.
-    _TERRIER_SPECIAL_RE = re.compile(r'[/+\-!(){}\[\]:^~\\"\']')
+    _TERRIER_SPECIAL_RE = re.compile(r'[/+\-!(){}\[\]:^~\\\"\'.?*<>&|@#$%=;,]')
 
     @classmethod
     def _sanitize_query(cls, text: str) -> list[str]:
