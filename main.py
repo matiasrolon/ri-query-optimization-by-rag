@@ -15,12 +15,28 @@ Usage:
 """
 
 import argparse
+import logging
 import os
 
 import pyterrier as pt
 
 import config
 from indexing import get_indexer
+
+
+# ── Logging setup ─────────────────────────────────────────────────────────────
+_log_file = os.path.join(config.OUTPUT_DIR, "benchmark.log")
+logging.basicConfig(
+    level=logging.DEBUG,
+    format="%(asctime)s  %(levelname)-8s  %(name)s — %(message)s",
+    datefmt="%Y-%m-%d %H:%M:%S",
+    handlers=[
+        logging.FileHandler(_log_file, encoding="utf-8"),
+        logging.StreamHandler(),  # also print to console
+    ],
+)
+# Keep console output clean: only WARNING+ on screen
+logging.getLogger().handlers[1].setLevel(logging.WARNING)
 
 
 def ensure_index() -> None:

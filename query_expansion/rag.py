@@ -23,19 +23,24 @@ import os
 import re
 import time
 import textwrap
+import logging
 
 import pandas as pd
 import pyterrier as pt
-from openai import OpenAI
+import httpx
+from openai import OpenAI, APITimeoutError, APIConnectionError
 
 import config
 from indexing import get_indexer
 from indexing.base import BaseIndexer
 
+logger = logging.getLogger(__name__)
 
 # ── Default LLM settings ──────────────────────────────────────────────────
 _DEFAULT_MAX_TOKENS = 256
 _DEFAULT_TEMPERATURE = 0.0
+_DEFAULT_TIMEOUT = 300  # 5 minutes per request
+_DEFAULT_MAX_RETRIES = 3
 
 _SYSTEM_PROMPT = textwrap.dedent("""\
     You are a search-query optimiser.  Given a user's original search
@@ -119,7 +124,12 @@ class RAGExpander:
         resolved_base_url = base_url if base_url is not None else config.LLM_BASE_URL
         # Ollama doesn't need an API key; use 'ollama' as a dummy value
         resolved_key = api_key or os.getenv("OPENAI_API_KEY", "") or "ollama"
-        self._client = OpenAI(api_key=resolved_key, base_url=resolved_base_url)
+        self._client = OpenAI(
+            api_key=resolved_key,
+            base_url=resolved_base_url,
+            timeout=httpx.Timeout(_DEFAULT_TIMEOUT, connect=30.0),
+            max_retries=0,  # we handle retries ourselves for better logging
+        )
 
         # Ensure PyTerrier is initialised
         if not pt.started():
@@ -159,7 +169,7 @@ class RAGExpander:
         )
 
     def _call_llm(self, original_query: str, passages: list[str]) -> str:
-        """Call the LLM to reformulate the query."""
+        """Call the LLM to reformulate the query, with retry on timeout."""
         user_prompt = self._build_user_prompt(original_query, passages)
 
         if self.verbose:
@@ -168,24 +178,45 @@ class RAGExpander:
             print(f"  │ [user]   {user_prompt}...")
             print("  └────────────────────────────────────────────────────")
 
-        response = self._client.chat.completions.create(
-            model=self.model,
-            messages=[
-                {"role": "system", "content": _SYSTEM_PROMPT},
-                {"role": "user", "content": user_prompt},
-            ],
-            max_tokens=self.max_tokens,
-            temperature=self.temperature,
+        last_exc: Exception | None = None
+        for attempt in range(1, _DEFAULT_MAX_RETRIES + 1):
+            try:
+                response = self._client.chat.completions.create(
+                    model=self.model,
+                    messages=[
+                        {"role": "system", "content": _SYSTEM_PROMPT},
+                        {"role": "user", "content": user_prompt},
+                    ],
+                    max_tokens=self.max_tokens,
+                    temperature=self.temperature,
+                )
+
+                reformulated = response.choices[0].message.content.strip()
+
+                # Safety: if the LLM returns nothing useful, fall back to
+                # the original query.
+                if not reformulated:
+                    return original_query
+
+                return reformulated
+
+            except (APITimeoutError, APIConnectionError) as exc:
+                last_exc = exc
+                wait = 2 ** attempt  # 2s, 4s, 8s
+                logger.warning(
+                    "LLM timeout (intento %d/%d) para query '%s'. "
+                    "Reintentando en %ds...",
+                    attempt, _DEFAULT_MAX_RETRIES, original_query[:60], wait,
+                )
+                time.sleep(wait)
+
+        # All retries exhausted — fall back to the original query
+        logger.error(
+            "LLM no respondió tras %d intentos para query '%s'. "
+            "Usando query original. Error: %s",
+            _DEFAULT_MAX_RETRIES, original_query[:60], last_exc,
         )
-
-        reformulated = response.choices[0].message.content.strip()
-
-        # Safety: if the LLM returns nothing useful, fall back to
-        # the original query.
-        if not reformulated:
-            return original_query
-
-        return reformulated
+        return original_query
 
     # ── Public API ─────────────────────────────────────────────────────────
 
