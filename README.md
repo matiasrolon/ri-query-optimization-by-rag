@@ -113,8 +113,9 @@ Editar `.env` según sea necesario. Las variables disponibles son:
 | Variable | Descripción | Valor por defecto |
 |---|---|---|
 | `FEEDBACK_DOCS` | Cantidad de documentos usados como feedback para la expansión | `10` |
-| `FEEDBACK_TERMS` | Cantidad de términos extraídos del feedback para expandir la query | `10` |
+| `FEEDBACK_TERMS` | Cantidad de términos adicionales a agregar a la query (aplica a PRF y RAG) | `10` |
 | `FEEDBACK_LAMBDA` | Peso de interpolación entre la query original y los términos de expansión (0.0 - 1.0) | `0.6` |
+| `EXPANSION_MODEL` | Modelo DFR para PRF: `bo1` (Bose-Einstein 1) o `kl` (Kullback-Leibler divergence) | `bo1` |
 
 **Configuración del LLM (expansión RAG):**
 

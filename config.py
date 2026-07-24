@@ -44,6 +44,15 @@ FEEDBACK_DOCS = int(os.getenv("FEEDBACK_DOCS", "10"))
 FEEDBACK_TERMS = int(os.getenv("FEEDBACK_TERMS", "10"))
 FEEDBACK_LAMBDA = float(os.getenv("FEEDBACK_LAMBDA", "0.6"))
 
+# ─── Expansion model ──────────────────────────────────────────────────────────
+# Valid values: "bo1" (Bose-Einstein 1) or "kl" (Kullback-Leibler divergence)
+EXPANSION_MODEL = os.getenv("EXPANSION_MODEL", "bo1").lower().strip()
+if EXPANSION_MODEL not in ("bo1", "kl"):
+    raise ValueError(
+        f"EXPANSION_MODEL inválido: '{EXPANSION_MODEL}'. "
+        "Debe ser 'bo1' o 'kl'."
+    )
+
 # ─── LLM settings (RAG query expansion) ────────────────────────────────────────
 # Default: Ollama local con qwen2.5:7b
 LLM_MODEL = os.getenv("LLM_MODEL", "qwen2.5:7b")

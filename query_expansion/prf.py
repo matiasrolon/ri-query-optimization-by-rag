@@ -1,27 +1,30 @@
 # -*- coding: utf-8 -*-
 """
-Pseudo-Relevance Feedback (PRF) query expansion.
+Pseudo-Relevance Feedback (PRF) query expansion using PyTerrier native QE.
 
-Implements a classic two-pass retrieval approach:
-  1. Run an initial BM25 retrieval to obtain top-k documents.
-  2. Extract discriminative terms from those documents using the
-     Divergence from Randomness Bo1 model (Terrier's default PRF model).
-  3. Interpolate the expanded terms with the original query.
-  4. Re-run BM25 with the expanded query.
+Delegates the full expansion process to Terrier's built-in DFR models
+(Bo1 or KL), which internally handle:
+  - Stopword removal
+  - PorterStemmer stemming
+  - Deduplication against the original query
+  - Term scoring via the selected DFR model
+  - Lexicon-based filtering
 
-Supports both PyTerrier (Terrier) and PISA indices via the unified
-``BaseIndexer`` interface.
+The expansion model is selected via the ``EXPANSION_MODEL`` environment
+variable (``bo1`` or ``kl``).
 
-Reference:
-    Amati, G. (2003). Probabilistic Models for Information Retrieval
-    based on Divergence from Randomness. PhD Thesis.
+Pipeline: BM25 (first pass) → QE rewriter → BM25 (second pass).
+
+References:
+    Amati, G. & van Rijsbergen, C. J. (2002). Probabilistic models of
+    information retrieval based on measuring the divergence from
+    randomness. ACM TOIS 20(4).
+
+    Amati, G. (2003). Probability models for information retrieval
+    based on divergence from randomness. PhD Thesis, U. Glasgow.
 """
 
 from __future__ import annotations
-
-import math
-import re
-from collections import Counter
 
 import pandas as pd
 import pyterrier as pt
@@ -29,11 +32,12 @@ import pyterrier as pt
 import config
 from indexing import get_indexer
 from indexing.base import BaseIndexer
+from query_expansion.utils import sanitize_query_str
 
 
 class PRFExpander:
     """
-    Pseudo-Relevance Feedback query expander.
+    Pseudo-Relevance Feedback query expander using PyTerrier native QE.
 
     Parameters
     ----------
@@ -44,7 +48,8 @@ class PRFExpander:
         Number of expansion terms to add to the original query.
     fb_lambda : float
         Interpolation weight for the **original** query (0.0–1.0).
-        The expanded terms receive weight ``(1 - fb_lambda)``.
+        Currently used only for interface parity; Bo1/KL use their
+        own internal weighting.
     indexer : BaseIndexer | None
         Pre-built indexer instance.  When *None* one is created
         automatically via ``get_indexer()``.
@@ -65,122 +70,34 @@ class PRFExpander:
         if not pt.started():
             pt.init()
 
-        # Indexer (engine-agnostic)
+        # Indexer (must be a TerrierIndexer for native QE)
         self._indexer = indexer or get_indexer()
+
+        if not hasattr(self._indexer, "_index"):
+            raise RuntimeError(
+                "PRF con QE nativo requiere un TerrierIndexer. "
+                "El indexer PISA no está soportado para esta funcionalidad."
+            )
+
+        self._indexer._ensure_loaded()
+        native_index = self._indexer._index
+
         self._first_pass = self._indexer.bm25_retriever(num_results=self.fb_docs)
         self._second_pass = self._indexer.bm25_retriever()
 
-    # ── Query sanitisation ────────────────────────────────────────────────
-
-    # Characters that are special / reserved in TerrierQL and must be
-    # removed from individual query terms before they are sent to the
-    # Terrier query parser.
-    _TERRIER_SPECIAL_RE = re.compile(r'[/+\-!(){}\[\]:^~\\\"\'.?*<>&|@#$%=;,]')
-
-    @classmethod
-    def _sanitize_query(cls, text: str) -> list[str]:
-        """
-        Sanitise raw query text for safe use with TerrierQL.
-
-        Replaces every special character with a space so that compound
-        tokens like ``pools/swim`` become two separate tokens
-        ``["pools", "swim"]``.  Empty tokens are dropped.
-        """
-        cleaned = cls._TERRIER_SPECIAL_RE.sub(" ", text)
-        return [t for t in cleaned.lower().split() if t]
-
-    # ── Term scoring (Bo1 – Bose-Einstein 1) ──────────────────────────────
-
-    def _score_terms_bo1(
-        self, term_freqs: Counter, total_tokens_fb: int
-    ) -> list[tuple[str, float]]:
-        """
-        Score candidate expansion terms using the Bo1 divergence model.
-
-        Bo1 weight for a term *t* with term-frequency *tf* in the
-        feedback set:
-
-            w(t) = tf * log2(1 + P_n) + log2(1 + 1/P_n)
-
-        where P_n = F / N (collection frequency / number of docs in
-        the collection).
-
-        Returns a list of ``(term, weight)`` sorted by descending weight.
-        """
-        N = self._indexer.get_num_docs()
-        scored: list[tuple[str, float]] = []
-
-        for term, tf in term_freqs.items():
-            F = self._indexer.get_collection_frequency(term)
-            if F == 0:
-                continue
-
-            P_n = F / N if N > 0 else 0
-            if P_n <= 0:
-                continue
-
-            weight = tf * math.log2(1 + P_n) + math.log2(1 + 1.0 / P_n)
-            scored.append((term, weight))
-
-        scored.sort(key=lambda x: x[1], reverse=True)
-        return scored[: self.fb_terms]
-
-    # ── Core expansion logic ──────────────────────────────────────────────
-
-    def _extract_terms_from_results(
-        self, results: pd.DataFrame
-    ) -> tuple[Counter, int]:
-        """
-        Tokenise the text of the retrieved documents and count term
-        frequencies.
-
-        Returns ``(term_counter, total_tokens)`` over the feedback set.
-        """
-        counter: Counter = Counter()
-        total = 0
-
-        texts = self._indexer.get_texts(results)
-
-        for text in texts:
-            tokens = text.lower().split()
-            counter.update(tokens)
-            total += len(tokens)
-
-        return counter, total
-
-    def _build_expanded_query(
-        self, original_query: str, scored_terms: list[tuple[str, float]]
-    ) -> str:
-        """
-        Build a weighted query string combining the original query
-        terms with the expansion terms using the configured fb_lambda.
-
-        Terrier's query language supports ``term^weight`` syntax.
-        """
-        if not scored_terms:
-            return original_query
-
-        # Normalise expansion weights to [0, 1]
-        max_w = scored_terms[0][1] if scored_terms else 1.0
-        if max_w == 0:
-            max_w = 1.0
-
-        parts: list[str] = []
-
-        # Original query terms with weight fb_lambda
-        for token in self._sanitize_query(original_query):
-            parts.append(f"{token}^{self.fb_lambda:.4f}")
-
-        # Expansion terms with weight (1 - fb_lambda) * normalised_score
-        expansion_weight = 1.0 - self.fb_lambda
-        for term, score in scored_terms:
-            # Sanitise expansion terms too (they come from document text)
-            clean_tokens = self._sanitize_query(term)
-            for ct in clean_tokens:
-                w = expansion_weight * (score / max_w)
-                parts.append(f"{ct}^{w:.4f}")
-
-        return " ".join(parts)
+        # Select DFR query expansion model
+        if config.EXPANSION_MODEL == "kl":
+            self._qe = pt.terrier.rewrite.KLQueryExpansion(
+                native_index,
+                fb_terms=self.fb_terms,
+                fb_docs=self.fb_docs,
+            )
+        else:
+            self._qe = pt.terrier.rewrite.Bo1QueryExpansion(
+                native_index,
+                fb_terms=self.fb_terms,
+                fb_docs=self.fb_docs,
+            )
 
     # ── Public API ─────────────────────────────────────────────────────────
 
@@ -196,26 +113,21 @@ class PRFExpander:
         Returns
         -------
         str
-            The expanded (weighted) query string.
+            The expanded query string in TerrierQL format (with weights).
         """
-        # 1. First-pass retrieval (sanitise to avoid TerrierQL parse errors)
-        safe_query = " ".join(self._sanitize_query(query))
+        safe_query = sanitize_query_str(query)
         first_results = self._first_pass.search(safe_query)
 
         if first_results.empty:
-            return query
+            return safe_query
 
-        # 2. Extract term frequencies from pseudo-relevant docs
-        term_freqs, total_tokens = self._extract_terms_from_results(
-            first_results
-        )
+        # Apply native QE transformer (R → Q)
+        expanded_df = self._qe.transform(first_results)
 
-        # 3. Score expansion terms with Bo1
-        scored = self._score_terms_bo1(term_freqs, total_tokens)
+        if expanded_df.empty or "query" not in expanded_df.columns:
+            return safe_query
 
-        # 4. Build expanded query
-        expanded = self._build_expanded_query(query, scored)
-        return expanded
+        return expanded_df.iloc[0]["query"]
 
     def search(self, query: str) -> pd.DataFrame:
         """
@@ -239,10 +151,6 @@ class PRFExpander:
     def expand_and_search(self, query: str) -> tuple[str, pd.DataFrame]:
         """
         Expand the query and run the second-pass retrieval in one call.
-
-        Useful when the caller needs both the expanded query text
-        (e.g. for metric logging) and the retrieval results without
-        running the expansion pipeline twice.
 
         Parameters
         ----------

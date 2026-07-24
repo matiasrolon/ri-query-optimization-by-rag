@@ -7,7 +7,9 @@ step is delegated to a Large Language Model (LLM):
   1. Run an initial BM25 retrieval to obtain top-k documents.
   2. Send the original query + retrieved document texts as context
      to the LLM, asking it to produce an improved search query.
-  3. Re-run BM25 with the reformulated query.
+  3. Post-process the LLM output (stopwords, stemming, lexicon
+     filtering, dedup, truncation to fb_terms).
+  4. Re-run BM25 with the cleaned expanded query.
 
 Uses an OpenAI-compatible API (by default Ollama running locally).
 No API key is required for local Ollama deployments.
@@ -33,6 +35,11 @@ from openai import OpenAI, APITimeoutError, APIConnectionError
 import config
 from indexing import get_indexer
 from indexing.base import BaseIndexer
+from query_expansion.utils import (
+    sanitize_query_str,
+    extract_feedback_terms,
+    postprocess_expanded_query,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -42,7 +49,7 @@ _DEFAULT_TEMPERATURE = 0.0
 _DEFAULT_TIMEOUT = 300  # 5 minutes per request
 _DEFAULT_MAX_RETRIES = 3
 
-_SYSTEM_PROMPT = textwrap.dedent("""\
+_SYSTEM_PROMPT_TEMPLATE = textwrap.dedent("""\
     You are a search-query optimiser.  Given a user's original search
     query and a set of potentially relevant document passages, your
     task is to produce an improved, more precise search query that
@@ -52,8 +59,9 @@ _SYSTEM_PROMPT = textwrap.dedent("""\
     Rules:
     - Output ONLY the improved query, nothing else.
     - Do NOT include explanations, numbering, or bullet points.
-    - Keep the query concise (no more than ~30 words).
-    - Do NOT rewrite the query; only provide terms to ADD.
+    - The improved query must have at most {max_words} words \
+({n_original} original + up to {fb_terms} new terms).
+    - Do NOT rewrite the original terms; only ADD new relevant terms.
     - Use English unless the original query is in another language.
 """)
 
@@ -68,14 +76,10 @@ class RAGExpander:
         Number of top-ranked documents to retrieve in the first pass
         and supply as context to the LLM.
     fb_terms : int
-        *Reserved for interface parity with PRFExpander.*
-        Not directly used by the LLM reformulation, but kept so that
-        the caller can swap strategies without changing the constructor
-        signature.
+        Maximum number of **additional** terms the LLM should add.
+        Also used to truncate the post-processed expansion.
     fb_lambda : float
         *Reserved for interface parity with PRFExpander.*
-        Not directly used, since the LLM produces a complete new query
-        rather than a weighted interpolation.
     indexer : BaseIndexer | None
         Pre-built indexer instance.  When *None* one is created
         automatically via ``get_indexer()``.
@@ -112,8 +116,8 @@ class RAGExpander:
         temperature: float = _DEFAULT_TEMPERATURE,
     ) -> None:
         self.fb_docs = fb_docs if fb_docs is not None else config.FEEDBACK_DOCS
-        self.fb_terms = fb_terms if fb_terms is not None else config.FEEDBACK_TERMS  # kept for interface parity
-        self.fb_lambda = fb_lambda if fb_lambda is not None else config.FEEDBACK_LAMBDA  # kept for interface parity
+        self.fb_terms = fb_terms if fb_terms is not None else config.FEEDBACK_TERMS
+        self.fb_lambda = fb_lambda if fb_lambda is not None else config.FEEDBACK_LAMBDA
 
         # LLM settings
         self.model = model if model is not None else config.LLM_MODEL
@@ -135,25 +139,31 @@ class RAGExpander:
         if not pt.started():
             pt.init()
 
-        # Indexer (engine-agnostic)
+        # Indexer (must be TerrierIndexer for lexicon-based post-processing)
         self._indexer = indexer or get_indexer()
+
+        if not hasattr(self._indexer, "_index"):
+            raise RuntimeError(
+                "RAG con post-procesamiento requiere un TerrierIndexer. "
+                "El indexer PISA no está soportado para esta funcionalidad."
+            )
+
+        self._indexer._ensure_loaded()
+
         self._first_pass = self._indexer.bm25_retriever(num_results=self.fb_docs)
         self._second_pass = self._indexer.bm25_retriever()
 
-    # ── Query sanitisation ────────────────────────────────────────────────
+    # ── Dynamic prompt construction ───────────────────────────────────────
 
-    _TERRIER_SPECIAL_RE = re.compile(r'[/+\-!(){}\[\]:^~\\"\']')
-
-    @classmethod
-    def _sanitize_query(cls, text: str) -> str:
-        """
-        Strip TerrierQL-special characters from a query string so that
-        the Terrier query parser does not raise a lexical error.
-        """
-        cleaned = cls._TERRIER_SPECIAL_RE.sub(" ", text)
-        return " ".join(cleaned.split())  # collapse whitespace
-
-    # ── LLM interaction ───────────────────────────────────────────────────
+    def _build_system_prompt(self, original_query: str) -> str:
+        """Build a system prompt with a dynamic word limit."""
+        n_original = len(original_query.split())
+        max_words = n_original + self.fb_terms
+        return _SYSTEM_PROMPT_TEMPLATE.format(
+            max_words=max_words,
+            n_original=n_original,
+            fb_terms=self.fb_terms,
+        )
 
     def _build_user_prompt(
         self, original_query: str, passages: list[str]
@@ -168,14 +178,17 @@ class RAGExpander:
             f"Improved query:"
         )
 
+    # ── LLM interaction ───────────────────────────────────────────────────
+
     def _call_llm(self, original_query: str, passages: list[str]) -> str:
         """Call the LLM to reformulate the query, with retry on timeout."""
+        system_prompt = self._build_system_prompt(original_query)
         user_prompt = self._build_user_prompt(original_query, passages)
 
         if self.verbose:
             print("  ┌─ Prompt enviado al LLM ────────────────────────────")
-            print(f"  │ [system] {_SYSTEM_PROMPT}...")
-            print(f"  │ [user]   {user_prompt}...")
+            print(f"  │ [system] {system_prompt[:200]}...")
+            print(f"  │ [user]   {user_prompt[:200]}...")
             print("  └────────────────────────────────────────────────────")
 
         last_exc: Exception | None = None
@@ -184,7 +197,7 @@ class RAGExpander:
                 response = self._client.chat.completions.create(
                     model=self.model,
                     messages=[
-                        {"role": "system", "content": _SYSTEM_PROMPT},
+                        {"role": "system", "content": system_prompt},
                         {"role": "user", "content": user_prompt},
                     ],
                     max_tokens=self.max_tokens,
@@ -224,6 +237,10 @@ class RAGExpander:
         """
         Expand a single query using RAG-based LLM reformulation.
 
+        The LLM output is post-processed to apply the same linguistic
+        treatment as the index (stopwords, stemming, lexicon filtering)
+        and filtered to terms that appear in the feedback documents.
+
         Parameters
         ----------
         query : str
@@ -232,33 +249,48 @@ class RAGExpander:
         Returns
         -------
         str
-            The LLM-reformulated query string.
+            The post-processed expanded query (plain text, no weights).
         """
-        # 1. First-pass retrieval (sanitise to avoid TerrierQL parse errors)
+        # 1. First-pass retrieval
         t0 = time.time()
-        safe_query = self._sanitize_query(query)
+        safe_query = sanitize_query_str(query)
         first_results = self._first_pass.search(safe_query)
         if self.verbose:
             print(f"  ⏱  First-pass retrieval : {time.time() - t0:.3f}s")
 
         if first_results.empty:
-            return query
+            return safe_query
 
         # 2. Get passage texts
         passages = self._indexer.get_texts(first_results)
         passages = [p for p in passages if p.strip()]
 
         if not passages:
-            return query
+            return safe_query
 
-        # 3. Ask the LLM to reformulate the query
+        # 3. Extract stemmed terms from feedback docs (for filtering)
+        feedback_terms = extract_feedback_terms(passages)
+
+        # 4. Ask the LLM to reformulate the query
         t0 = time.time()
-        reformulated = self._call_llm(query, passages)
+        raw_llm_output = self._call_llm(query, passages)
         if self.verbose:
             print(f"  ⏱  Llamada al LLM      : {time.time() - t0:.3f}s")
-            print(f"  📝 Query expandida      : \"{reformulated}\"")
+            print(f"  📝 Salida cruda LLM     : \"{raw_llm_output}\"")
 
-        return reformulated
+        # 5. Post-process: stopwords, stemming, lexicon, dedup, truncate
+        expanded = postprocess_expanded_query(
+            original_query=query,
+            raw_expanded_text=raw_llm_output,
+            index=self._indexer._index,
+            fb_terms=self.fb_terms,
+            feedback_doc_terms=feedback_terms,
+        )
+
+        if self.verbose:
+            print(f"  📝 Query post-procesada : \"{expanded}\"")
+
+        return expanded
 
     def search(self, query: str) -> pd.DataFrame:
         """
@@ -282,10 +314,6 @@ class RAGExpander:
         """
         Expand the query and run the second-pass retrieval in one call.
 
-        Useful when the caller needs both the expanded query text
-        (e.g. for metric logging) and the retrieval results without
-        invoking the LLM twice.
-
         Parameters
         ----------
         query : str
@@ -296,15 +324,14 @@ class RAGExpander:
         tuple[str, pd.DataFrame]
             A tuple of (expanded_query, search_results).
         """
-        reformulated = self.expand(query)
+        expanded = self.expand(query)
 
         t0 = time.time()
-        safe_reformulated = self._sanitize_query(reformulated)
-        results = self._second_pass.search(safe_reformulated)
+        results = self._second_pass.search(expanded)
         if self.verbose:
             print(f"  ⏱  Second-pass retrieval: {time.time() - t0:.3f}s")
 
-        return reformulated, results
+        return expanded, results
 
     def search_batch(self, topics: pd.DataFrame) -> pd.DataFrame:
         """
@@ -323,8 +350,8 @@ class RAGExpander:
         """
         all_results = []
         for _, row in topics.iterrows():
-            reformulated = self.expand(row["query"])
-            result = self._second_pass.search(self._sanitize_query(reformulated))
+            expanded = self.expand(row["query"])
+            result = self._second_pass.search(expanded)
             result["qid"] = row["qid"]
             all_results.append(result)
 
