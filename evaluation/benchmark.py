@@ -27,6 +27,10 @@ from indexing.base import BaseIndexer
 from query_expansion.prf import PRFExpander
 from query_expansion.rag import RAGExpander
 
+import logging
+
+logger = logging.getLogger(__name__)
+
 
 # ── Data loading ──────────────────────────────────────────────────────────────
 
@@ -139,6 +143,14 @@ def run_prf_benchmark(
             "mrr": round(mrr, 6),
         })
 
+        logger.info(
+            "[PRF] qid=%s | original='%s' | expanded='%s' | "
+            "MRR=%.4f | time=%.3fs | terms: %d→%d",
+            qid, original_query, expanded_query,
+            mrr, elapsed,
+            count_terms(original_query), count_terms(expanded_query),
+        )
+
         print(f"         MRR={mrr:.4f}  time={elapsed:.3f}s  "
               f"terms: {count_terms(original_query)}→{count_terms(expanded_query)}")
 
@@ -180,6 +192,14 @@ def run_rag_benchmark(
             "time_seconds": round(elapsed, 4),
             "mrr": round(mrr, 6),
         })
+
+        logger.info(
+            "[RAG] qid=%s | original='%s' | expanded='%s' | "
+            "MRR=%.4f | time=%.3fs | terms: %d→%d",
+            qid, original_query, expanded_query,
+            mrr, elapsed,
+            count_terms(original_query), count_terms(expanded_query),
+        )
 
         print(f"         MRR={mrr:.4f}  time={elapsed:.3f}s  "
               f"terms: {count_terms(original_query)}→{count_terms(expanded_query)}")

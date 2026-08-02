@@ -37,6 +37,8 @@ logging.basicConfig(
 )
 # Keep console output clean: only WARNING+ on screen
 logging.getLogger().handlers[1].setLevel(logging.WARNING)
+# Silence noisy jnius reflection logs
+logging.getLogger("kivy.jnius.reflect").setLevel(logging.WARNING)
 
 
 def ensure_index() -> None:

@@ -255,8 +255,21 @@ class RAGExpander:
         t0 = time.time()
         safe_query = sanitize_query_str(query)
         first_results = self._first_pass.search(safe_query)
+        elapsed_first = time.time() - t0
         if self.verbose:
-            print(f"  ⏱  First-pass retrieval : {time.time() - t0:.3f}s")
+            print(f"  ⏱  First-pass retrieval : {elapsed_first:.3f}s")
+
+        logger.info(
+            "[1st pass] query='%s' | %d docs retrieved in %.3fs",
+            safe_query, len(first_results), elapsed_first,
+        )
+        if not first_results.empty:
+            top_docs = first_results.head(10)
+            docs_summary = ", ".join(
+                f"{r['docno']}({r['score']:.4f})"
+                for _, r in top_docs.iterrows()
+            )
+            logger.info("[1st pass] top results: %s", docs_summary)
 
         if first_results.empty:
             return safe_query
@@ -274,9 +287,15 @@ class RAGExpander:
         # 4. Ask the LLM to reformulate the query
         t0 = time.time()
         raw_llm_output = self._call_llm(query, passages)
+        llm_elapsed = time.time() - t0
         if self.verbose:
-            print(f"  ⏱  Llamada al LLM      : {time.time() - t0:.3f}s")
+            print(f"  ⏱  Llamada al LLM      : {llm_elapsed:.3f}s")
             print(f"  📝 Salida cruda LLM     : \"{raw_llm_output}\"")
+
+        logger.info(
+            "[LLM] raw output (%.3fs): '%s'",
+            llm_elapsed, raw_llm_output,
+        )
 
         # 5. Post-process: stopwords, stemming, lexicon, dedup, truncate
         expanded = postprocess_expanded_query(
@@ -289,6 +308,11 @@ class RAGExpander:
 
         if self.verbose:
             print(f"  📝 Query post-procesada : \"{expanded}\"")
+
+        logger.info(
+            "[Optimized] original='%s' → expanded='%s'",
+            query, expanded,
+        )
 
         return expanded
 
@@ -328,8 +352,21 @@ class RAGExpander:
 
         t0 = time.time()
         results = self._second_pass.search(expanded)
+        elapsed_second = time.time() - t0
         if self.verbose:
-            print(f"  ⏱  Second-pass retrieval: {time.time() - t0:.3f}s")
+            print(f"  ⏱  Second-pass retrieval: {elapsed_second:.3f}s")
+
+        logger.info(
+            "[2nd pass] expanded_query='%s' | %d docs retrieved in %.3fs",
+            expanded, len(results), elapsed_second,
+        )
+        if not results.empty:
+            top_docs = results.head(10)
+            docs_summary = ", ".join(
+                f"{r['docno']}({r['score']:.4f})"
+                for _, r in top_docs.iterrows()
+            )
+            logger.info("[2nd pass] top results: %s", docs_summary)
 
         return expanded, results
 
