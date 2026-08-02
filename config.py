@@ -26,11 +26,11 @@ INDEX_DIR = os.getenv("INDEX_DIR", os.path.join(OUTPUT_DIR, "index"))
 
 # Dataset files (relative to DATA_DIR)
 COLLECTION_FILE = os.path.join(DATA_DIR, "collection.tsv")
-QUERIES_DIR = os.path.join(DATA_DIR, "queries")
-QRELS_FILE = os.path.join(DATA_DIR, "qrels.dev.tsv")
+QUERIES_FILE = os.path.join(DATA_DIR, "queries.dev.small.tsv")
+QRELS_FILE = os.path.join(DATA_DIR, "qrels.dev.small.tsv")
 
 # ─── Ensure required directories exist ─────────────────────────────────────────
-for _dir in (DATA_DIR, OUTPUT_DIR, INDEX_DIR, QUERIES_DIR):
+for _dir in (DATA_DIR, OUTPUT_DIR, INDEX_DIR):
     os.makedirs(_dir, exist_ok=True)
 
 # ─── Dataset parameters ───────────────────────────────────────────────────────

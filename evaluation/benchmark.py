@@ -2,8 +2,8 @@
 """
 Benchmark module — compares RAG vs PRF query expansion.
 
-Loads development queries from ``queries.dev.tsv`` and relevance judgements
-from ``qrels.dev.tsv``, then runs both expansion strategies measuring:
+Loads development queries from ``queries.dev.small.tsv`` and relevance judgements
+from ``qrels.dev.small.tsv``, then runs both expansion strategies measuring:
   - Resolution time per query.
   - MRR (Mean Reciprocal Rank) per query.
 
@@ -28,39 +28,76 @@ from query_expansion.prf import PRFExpander
 from query_expansion.rag import RAGExpander
 
 
+# ── Constants ─────────────────────────────────────────────────────────────────
+_IRDS_DATASET = "irds:msmarco-passage/dev/small"
+
+
 # ── Data loading ──────────────────────────────────────────────────────────────
 
 def load_queries(path: str | None = None) -> pd.DataFrame:
     """
-    Load queries from a TSV file (format: ``qid\\tquery``).
+    Load dev/small queries.
+
+    Resolution order:
+    1. Explicit *path* argument.
+    2. Local file at ``config.QUERIES_FILE`` (if it exists on disk).
+    3. Automatic download via ``pt.get_dataset("irds:msmarco-passage/dev/small")``.
 
     Returns a DataFrame with columns ``qid`` and ``query``.
     """
-    path = path or os.path.join(config.QUERIES_DIR, "queries.dev.tsv")
-    df = pd.read_csv(
-        path, sep="\t", header=None, names=["qid", "query"], dtype={"qid": str}
-    )
+    path = path or config.QUERIES_FILE
+
+    if os.path.isfile(path):
+        print(f"   Queries: leyendo de archivo local → {path}")
+        df = pd.read_csv(
+            path, sep="\t", header=None, names=["qid", "query"], dtype={"qid": str}
+        )
+        return df
+
+    # Fallback: download via ir_datasets
+    print(f"   Queries: archivo local no encontrado ({path})")
+    print(f"   Descargando vía ir_datasets ({_IRDS_DATASET})...")
+    ds = pt.get_dataset(_IRDS_DATASET)
+    df = ds.get_topics()
+    df["qid"] = df["qid"].astype(str)
     return df
 
 
 def load_qrels(path: str | None = None) -> dict[str, set[str]]:
     """
-    Load relevance judgements from a TSV file.
+    Load dev/small relevance judgements.
 
-    MS MARCO qrels format: ``qid  0  docno  relevance``
+    Resolution order:
+    1. Explicit *path* argument.
+    2. Local file at ``config.QRELS_FILE`` (if it exists on disk).
+    3. Automatic download via ``pt.get_dataset("irds:msmarco-passage/dev/small")``.
 
     Returns a dict mapping ``qid`` → set of relevant ``docno`` strings.
     """
     path = path or config.QRELS_FILE
+
+    if os.path.isfile(path):
+        print(f"   Qrels:   leyendo de archivo local → {path}")
+        qrels: dict[str, set[str]] = {}
+        with open(path, "r", encoding="utf-8") as f:
+            for line in f:
+                parts = line.strip().split("\t")
+                if len(parts) < 4:
+                    continue
+                qid, _, docno, rel = parts[0], parts[1], parts[2], parts[3]
+                if int(rel) > 0:
+                    qrels.setdefault(qid, set()).add(docno)
+        return qrels
+
+    # Fallback: download via ir_datasets
+    print(f"   Qrels:   archivo local no encontrado ({path})")
+    print(f"   Descargando vía ir_datasets ({_IRDS_DATASET})...")
+    ds = pt.get_dataset(_IRDS_DATASET)
+    qrels_df = ds.get_qrels()
     qrels: dict[str, set[str]] = {}
-    with open(path, "r", encoding="utf-8") as f:
-        for line in f:
-            parts = line.strip().split("\t")
-            if len(parts) < 4:
-                continue
-            qid, _, docno, rel = parts[0], parts[1], parts[2], parts[3]
-            if int(rel) > 0:
-                qrels.setdefault(qid, set()).add(docno)
+    for _, row in qrels_df.iterrows():
+        if int(row["label"]) > 0:
+            qrels.setdefault(str(row["qid"]), set()).add(str(row["docno"]))
     return qrels
 
 

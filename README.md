@@ -47,20 +47,22 @@ El proyecto trabaja con la colección **MS MARCO Passage Ranking** de Microsoft.
 | Archivo | Descripción | Ubicación esperada |
 |---|---|---|
 | `collection.tsv` | Colección de ~8.8M passages (formato: `pid\tpassage`) | `./data/collection.tsv` |
-| `qrels.dev.tsv` | Juicios de relevancia (dev set) | `./data/qrels.dev.tsv` |
-| Archivos de queries | Queries de evaluación | `./data/queries/` |
+| `queries.dev.small.tsv` | Queries de evaluación — dev/small split (6,980 queries) | `./data/queries.dev.small.tsv` |
+| `qrels.dev.small.tsv` | Juicios de relevancia — dev/small split (7,437 juicios) | `./data/qrels.dev.small.tsv` |
+
+> [!NOTE]
+> Los archivos de queries y qrels son **opcionales**. Si no están presentes en `DATA_DIR`, se descargan automáticamente vía `ir_datasets` (`msmarco-passage/dev/small`) la primera vez que se ejecuta el benchmark.
 
 > [!IMPORTANT]
-> El archivo `collection.tsv` es indispensable para la indexación. Sin él, el programa no puede ejecutarse.
+> El archivo `collection.tsv` es indispensable para la indexación. Sin él, el programa no puede construir el índice.
 
 #### Estructura esperada de directorios
 
 ```
 data/                ← datos de entrada (dataset)
 ├── collection.tsv
-├── qrels.dev.tsv
-└── queries/
-    └── ...
+├── queries.dev.small.tsv   ← opcional (se descarga automáticamente)
+└── qrels.dev.small.tsv     ← opcional (se descarga automáticamente)
 
 output/              ← generado automáticamente por el programa
 └── index/
