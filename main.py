@@ -91,11 +91,30 @@ def main() -> None:
     if not pt.started():
         pt.init()
 
-    print(f"CPUs: {os.cpu_count()} | THREADS = {config.THREADS}")
-    print(f"Método de indexación: {config.INDEXING_METHOD.upper()}")
+    print("\n" + "=" * 60)
+    print(" ⚙  PARÁMETROS DE CONFIGURACIÓN DEL EXPERIMENTO (.env)")
+    print("=" * 60)
+    print(f"  • INDEXING_METHOD : {config.INDEXING_METHOD.upper()}")
+    print(f"  • EXPANSION_MODEL : {config.EXPANSION_MODEL.upper()}")
+    print(f"  • FEEDBACK_DOCS   : {config.FEEDBACK_DOCS}")
+    print(f"  • FEEDBACK_TERMS  : {config.FEEDBACK_TERMS}")
+    print(f"  • FEEDBACK_LAMBDA : {config.FEEDBACK_LAMBDA}")
+    print(f"  • LLM_MODEL       : {config.LLM_MODEL}")
+    print(f"  • LLM_BASE_URL    : {config.LLM_BASE_URL}")
+    print(f"  • CPUs / THREADS  : {os.cpu_count()} / {config.THREADS}")
     if config.FORCE_REINDEX:
-        print("⚠  FORCE_REINDEX activado — se re-construirá el índice.")
-    print("-" * 50)
+        print("  • ⚠  FORCE_REINDEX: activado — se re-construirá el índice.")
+    print("=" * 60 + "\n")
+
+    logging.info("=== CONFIGURACIÓN DE EXPERIMENTO ===")
+    logging.info("INDEXING_METHOD=%s", config.INDEXING_METHOD)
+    logging.info("EXPANSION_MODEL=%s", config.EXPANSION_MODEL)
+    logging.info("FEEDBACK_DOCS=%d", config.FEEDBACK_DOCS)
+    logging.info("FEEDBACK_TERMS=%d", config.FEEDBACK_TERMS)
+    logging.info("FEEDBACK_LAMBDA=%.2f", config.FEEDBACK_LAMBDA)
+    logging.info("LLM_MODEL=%s", config.LLM_MODEL)
+    logging.info("LLM_BASE_URL=%s", config.LLM_BASE_URL)
+
 
     # Step 1: Ensure index
     ensure_index()

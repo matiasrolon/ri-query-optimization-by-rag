@@ -188,8 +188,10 @@ def run_prf_benchmark(
             count_terms(original_query), count_terms(expanded_query),
         )
 
+        print(f"         📝 Query Expandida: \"{expanded_query}\"")
         print(f"         MRR={mrr:.4f}  time={elapsed:.3f}s  "
               f"terms: {count_terms(original_query)}→{count_terms(expanded_query)}")
+
 
     return results_list
 
@@ -238,8 +240,10 @@ def run_rag_benchmark(
             count_terms(original_query), count_terms(expanded_query),
         )
 
+        print(f"         📝 Query Expandida: \"{expanded_query}\"")
         print(f"         MRR={mrr:.4f}  time={elapsed:.3f}s  "
               f"terms: {count_terms(original_query)}→{count_terms(expanded_query)}")
+
 
     return results_list
 

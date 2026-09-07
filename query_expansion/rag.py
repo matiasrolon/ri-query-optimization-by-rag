@@ -37,8 +37,9 @@ from indexing import get_indexer
 from indexing.base import BaseIndexer
 from query_expansion.utils import (
     sanitize_query_str,
-    extract_feedback_terms,
     postprocess_expanded_query,
+    postprocess_llm_weighted_query,
+    postprocess_fixed_lambda_query,
 )
 
 logger = logging.getLogger(__name__)
@@ -50,20 +51,33 @@ _DEFAULT_TIMEOUT = 300  # 5 minutes per request
 _DEFAULT_MAX_RETRIES = 3
 
 _SYSTEM_PROMPT_TEMPLATE = textwrap.dedent("""\
-    You are a search-query optimiser.  Given a user's original search
-    query and a set of potentially relevant document passages, your
-    task is to produce an improved, more precise search query that
-    would retrieve the most relevant documents for the user's
-    information need.
+    You are an expert Search Engine Indexing Specialist.
+    Given a user's original search query and a set of relevant document passages, your task is to generate EXACTLY {fb_terms} additional, highly specific, technical, and domain-discriminative expansion keywords.
 
     Rules:
-    - Output ONLY the improved query, nothing else.
-    - Do NOT include explanations, numbering, or bullet points.
-    - The improved query must have at most {max_words} words \
-({n_original} original + up to {fb_terms} new terms).
-    - Do NOT rewrite the original terms; only ADD new relevant terms.
-    - Use English unless the original query is in another language.
+    - Output ONLY a space-separated list of EXACTLY {fb_terms} new expansion keywords.
+    - Do NOT include or repeat any words already present in the original query.
+    - Do NOT include explanations, numbering, punctuation, or bullet points.
+    - Select highly specific technical nouns, domain synonyms, or exact entity names.
+    - DO NOT output generic search words such as: definition, explanation, overview, summary, guide, meaning, type, list, cause, effect, symptom, cost, price, history.
+
+    Examples:
+
+    Example 1:
+    Original query: treating tension headaches
+    Retrieved passages:
+    [1] Ibuprofen and acetaminophen are common over-the-counter pain relievers for neurological stress and migraines.
+    Additional expansion keywords:
+    migraine ibuprofen stress analgesics neurological
+
+    Example 2:
+    Original query: prime rate in canada
+    Retrieved passages:
+    [1] The Bank of Canada sets the overnight lending rate affecting commercial mortgage interest and inflation.
+    Additional expansion keywords:
+    interest central-bank lending inflation monetary
 """)
+
 
 
 class RAGExpander:
@@ -156,26 +170,22 @@ class RAGExpander:
     # ── Dynamic prompt construction ───────────────────────────────────────
 
     def _build_system_prompt(self, original_query: str) -> str:
-        """Build a system prompt with a dynamic word limit."""
-        n_original = len(original_query.split())
-        max_words = n_original + self.fb_terms
+        """Build a system prompt requesting exactly fb_terms weighted expansion terms."""
         return _SYSTEM_PROMPT_TEMPLATE.format(
-            max_words=max_words,
-            n_original=n_original,
             fb_terms=self.fb_terms,
         )
 
     def _build_user_prompt(
         self, original_query: str, passages: list[str]
     ) -> str:
-        """Build the user-facing prompt with context passages."""
+        """Build the user-facing prompt with full context passages (untruncated)."""
         numbered = "\n".join(
-            f"[{i + 1}] {p[:500]}" for i, p in enumerate(passages)
+            f"[{i + 1}] {p.strip()}" for i, p in enumerate(passages)
         )
         return (
             f"Original query: {original_query}\n\n"
             f"Retrieved passages:\n{numbered}\n\n"
-            f"Improved query:"
+            f"Additional {self.fb_terms} expansion keywords:"
         )
 
     # ── LLM interaction ───────────────────────────────────────────────────
@@ -251,7 +261,7 @@ class RAGExpander:
         str
             The post-processed expanded query (plain text, no weights).
         """
-        # 1. First-pass retrieval
+        # First-pass retrieval
         t0 = time.time()
         safe_query = sanitize_query_str(query)
         first_results = self._first_pass.search(safe_query)
@@ -274,17 +284,14 @@ class RAGExpander:
         if first_results.empty:
             return safe_query
 
-        # 2. Get passage texts
+        # Get passage texts
         passages = self._indexer.get_texts(first_results)
         passages = [p for p in passages if p.strip()]
 
         if not passages:
             return safe_query
 
-        # 3. Extract stemmed terms from feedback docs (for filtering)
-        feedback_terms = extract_feedback_terms(passages)
-
-        # 4. Ask the LLM to reformulate the query
+        # Ask the LLM to reformulate the query
         t0 = time.time()
         raw_llm_output = self._call_llm(query, passages)
         llm_elapsed = time.time() - t0
@@ -297,14 +304,15 @@ class RAGExpander:
             llm_elapsed, raw_llm_output,
         )
 
-        # 5. Post-process: stopwords, stemming, lexicon, dedup, truncate
+        # Option B: Plain Text Query Expansion (No Weights)
+        # Concatenates original query and valid LLM expansion terms in plain text
         expanded = postprocess_expanded_query(
             original_query=query,
             raw_expanded_text=raw_llm_output,
             index=self._indexer._index,
             fb_terms=self.fb_terms,
-            feedback_doc_terms=feedback_terms,
         )
+
 
         if self.verbose:
             print(f"  📝 Query post-procesada : \"{expanded}\"")
