@@ -4,14 +4,16 @@ Main entry point — MS MARCO passage indexing & query expansion benchmark.
 
 1. Reads the indexing method from .env (INDEXING_METHOD) and ensures the
    index is available (loading from disk or building from scratch).
-2. Runs both query expansion strategies (PRF and RAG) over the development
-   queries, measuring per-query MRR and resolution time.
+2. Runs baseline BM25 (no expansion) alongside PRF and RAG query expansion
+   over the development queries, measuring per-query MRR@10 and per-stage timings.
 3. Exports combined results to ``output/benchmark_results.csv``.
 
 Usage:
-    python main.py                              # full benchmark
-    python main.py --max-queries 50              # first 50 queries
-    python main.py --offset 100 --max-queries 50 # queries 100–149
+    python main.py                              # full benchmark (bm25, prf, rag)
+    python main.py --methods bm25               # only BM25 baseline
+    python main.py --methods bm25 prf           # BM25 + PRF
+    python main.py --max-queries 50             # first 50 queries
+    python main.py --offset 100 --max-queries 50
 """
 
 import argparse
@@ -59,17 +61,24 @@ def ensure_index() -> None:
 def run_evaluation(
     max_queries: int | None = None,
     offset: int = 0,
+    methods: list[str] | None = None,
+    cutoff: int = 10,
 ) -> None:
-    """Run PRF + RAG benchmarks and export CSV."""
+    """Run BM25, PRF, and/or RAG benchmarks and export CSV."""
     from evaluation.benchmark import run_benchmark
 
-    csv_path = run_benchmark(max_queries=max_queries, offset=offset)
+    csv_path = run_benchmark(
+        max_queries=max_queries,
+        offset=offset,
+        methods=methods,
+        cutoff=cutoff,
+    )
     print(f"\n📄 Resultados guardados en: {csv_path}")
 
 
 def main() -> None:
     parser = argparse.ArgumentParser(
-        description="MS MARCO query expansion benchmark (PRF vs RAG)"
+        description="MS MARCO benchmark: BM25 baseline vs PRF vs RAG"
     )
     parser.add_argument(
         "--max-queries",
@@ -83,6 +92,19 @@ def main() -> None:
         default=0,
         help="Saltar las primeras N queries (para ejecución por pasadas).",
     )
+    parser.add_argument(
+        "--methods",
+        nargs="+",
+        default=["bm25", "prf", "rag"],
+        choices=["bm25", "prf", "rag"],
+        help="Métodos a evaluar (por defecto: bm25 prf rag).",
+    )
+    parser.add_argument(
+        "--cutoff",
+        type=int,
+        default=10,
+        help="Umbral de corte para el cálculo de MRR (por defecto 10 para MRR@10).",
+    )
     args = parser.parse_args()
 
     # Initialise PyTerrier
@@ -91,6 +113,8 @@ def main() -> None:
 
     print(f"CPUs: {os.cpu_count()} | THREADS = {config.THREADS}")
     print(f"Método de indexación: {config.INDEXING_METHOD.upper()}")
+    print(f"Métodos seleccionados: {', '.join(args.methods).upper()}")
+    print(f"Métrica de evaluación: MRR@{args.cutoff}")
     if config.FORCE_REINDEX:
         print("⚠  FORCE_REINDEX activado — se re-construirá el índice.")
     print("-" * 50)
@@ -100,7 +124,12 @@ def main() -> None:
 
     # Step 2: Run benchmarks
     print()
-    run_evaluation(max_queries=args.max_queries, offset=args.offset)
+    run_evaluation(
+        max_queries=args.max_queries,
+        offset=args.offset,
+        methods=args.methods,
+        cutoff=args.cutoff,
+    )
 
 
 if __name__ == "__main__":

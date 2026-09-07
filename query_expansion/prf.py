@@ -26,6 +26,8 @@ References:
 
 from __future__ import annotations
 
+import time
+
 import pandas as pd
 import pyterrier as pt
 
@@ -99,6 +101,13 @@ class PRFExpander:
                 fb_docs=self.fb_docs,
             )
 
+        self.last_timings: dict[str, float] = {
+            "time_first_pass": 0.0,
+            "time_get_texts": 0.0,
+            "time_llm": 0.0,
+            "time_second_pass": 0.0,
+        }
+
     # ── Public API ─────────────────────────────────────────────────────────
 
     def expand(self, query: str) -> str:
@@ -116,7 +125,16 @@ class PRFExpander:
             The expanded query string in TerrierQL format (with weights).
         """
         safe_query = sanitize_query_str(query)
+        t0 = time.time()
         first_results = self._first_pass.search(safe_query)
+        time_first_pass = time.time() - t0
+
+        self.last_timings = {
+            "time_first_pass": round(time_first_pass, 4),
+            "time_get_texts": 0.0,
+            "time_llm": 0.0,
+            "time_second_pass": 0.0,
+        }
 
         if first_results.empty:
             return safe_query
@@ -163,7 +181,11 @@ class PRFExpander:
             A tuple of (expanded_query, search_results).
         """
         expanded_query = self.expand(query)
-        return expanded_query, self._second_pass.search(expanded_query)
+        t0 = time.time()
+        results = self._second_pass.search(expanded_query)
+        time_second_pass = time.time() - t0
+        self.last_timings["time_second_pass"] = round(time_second_pass, 4)
+        return expanded_query, results
 
     def search_batch(self, topics: pd.DataFrame) -> pd.DataFrame:
         """

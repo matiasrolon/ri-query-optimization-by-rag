@@ -152,6 +152,12 @@ class RAGExpander:
 
         self._first_pass = self._indexer.bm25_retriever(num_results=self.fb_docs)
         self._second_pass = self._indexer.bm25_retriever()
+        self.last_timings: dict[str, float] = {
+            "time_first_pass": 0.0,
+            "time_get_texts": 0.0,
+            "time_llm": 0.0,
+            "time_second_pass": 0.0,
+        }
 
     # ── Dynamic prompt construction ───────────────────────────────────────
 
@@ -255,17 +261,34 @@ class RAGExpander:
         t0 = time.time()
         safe_query = sanitize_query_str(query)
         first_results = self._first_pass.search(safe_query)
+        time_first_pass = time.time() - t0
         if self.verbose:
-            print(f"  ⏱  First-pass retrieval : {time.time() - t0:.3f}s")
+            print(f"  ⏱  First-pass retrieval : {time_first_pass:.3f}s")
 
         if first_results.empty:
+            self.last_timings = {
+                "time_first_pass": round(time_first_pass, 4),
+                "time_get_texts": 0.0,
+                "time_llm": 0.0,
+                "time_second_pass": 0.0,
+            }
             return safe_query
 
         # 2. Get passage texts
+        t0 = time.time()
         passages = self._indexer.get_texts(first_results)
+        time_get_texts = time.time() - t0
+        if self.verbose:
+            print(f"  ⏱  Recuperación de texto: {time_get_texts:.3f}s")
         passages = [p for p in passages if p.strip()]
 
         if not passages:
+            self.last_timings = {
+                "time_first_pass": round(time_first_pass, 4),
+                "time_get_texts": round(time_get_texts, 4),
+                "time_llm": 0.0,
+                "time_second_pass": 0.0,
+            }
             return safe_query
 
         # 3. Extract stemmed terms from feedback docs (for filtering)
@@ -274,8 +297,9 @@ class RAGExpander:
         # 4. Ask the LLM to reformulate the query
         t0 = time.time()
         raw_llm_output = self._call_llm(query, passages)
+        time_llm = time.time() - t0
         if self.verbose:
-            print(f"  ⏱  Llamada al LLM      : {time.time() - t0:.3f}s")
+            print(f"  ⏱  Llamada al LLM      : {time_llm:.3f}s")
             print(f"  📝 Salida cruda LLM     : \"{raw_llm_output}\"")
 
         # 5. Post-process: stopwords, stemming, lexicon, dedup, truncate
@@ -290,6 +314,12 @@ class RAGExpander:
         if self.verbose:
             print(f"  📝 Query post-procesada : \"{expanded}\"")
 
+        self.last_timings = {
+            "time_first_pass": round(time_first_pass, 4),
+            "time_get_texts": round(time_get_texts, 4),
+            "time_llm": round(time_llm, 4),
+            "time_second_pass": 0.0,
+        }
         return expanded
 
     def search(self, query: str) -> pd.DataFrame:
@@ -328,9 +358,11 @@ class RAGExpander:
 
         t0 = time.time()
         results = self._second_pass.search(expanded)
+        time_second_pass = time.time() - t0
         if self.verbose:
-            print(f"  ⏱  Second-pass retrieval: {time.time() - t0:.3f}s")
+            print(f"  ⏱  Second-pass retrieval: {time_second_pass:.3f}s")
 
+        self.last_timings["time_second_pass"] = round(time_second_pass, 4)
         return expanded, results
 
     def search_batch(self, topics: pd.DataFrame) -> pd.DataFrame:

@@ -24,6 +24,7 @@ import pyterrier as pt
 import config
 from indexing import get_indexer
 from indexing.base import BaseIndexer
+from query_expansion.baseline import BM25Baseline
 from query_expansion.prf import PRFExpander
 from query_expansion.rag import RAGExpander
 
@@ -104,10 +105,10 @@ def load_qrels(path: str | None = None) -> dict[str, set[str]]:
 # ── MRR computation ──────────────────────────────────────────────────────────
 
 def compute_mrr(
-    results: pd.DataFrame, relevant_docs: set[str]
+    results: pd.DataFrame, relevant_docs: set[str], cutoff: int = 10
 ) -> float:
     """
-    Compute the Reciprocal Rank for a single query result set.
+    Compute the Reciprocal Rank at cutoff (MRR@k) for a single query result set.
 
     Parameters
     ----------
@@ -115,16 +116,18 @@ def compute_mrr(
         Retrieval results with at least ``docno`` column, ordered by rank.
     relevant_docs : set[str]
         Set of docnos considered relevant for this query.
+    cutoff : int
+        Cutoff threshold (default 10 for the official MS MARCO benchmark standard).
 
     Returns
     -------
     float
-        1/rank of the first relevant document, or 0.0 if none found.
+        1/rank of the first relevant document within the cutoff, or 0.0 if none found.
     """
     if results.empty or not relevant_docs:
         return 0.0
 
-    for rank, docno in enumerate(results["docno"].values, start=1):
+    for rank, docno in enumerate(results["docno"].values[:cutoff], start=1):
         if str(docno) in relevant_docs:
             return 1.0 / rank
 
@@ -140,10 +143,58 @@ def count_terms(query: str) -> int:
 
 # ── Benchmark runners ─────────────────────────────────────────────────────────
 
+def run_bm25_benchmark(
+    queries: pd.DataFrame,
+    qrels: dict[str, set[str]],
+    indexer: BaseIndexer,
+    cutoff: int = 10,
+) -> list[dict]:
+    """
+    Run baseline BM25 retrieval (no query expansion) over all queries and collect metrics.
+
+    Returns a list of dicts, one per query, ready for CSV export.
+    """
+    searcher = BM25Baseline(indexer=indexer)
+    results_list: list[dict] = []
+    total = len(queries)
+
+    for i, (_, row) in enumerate(queries.iterrows(), start=1):
+        qid = str(row["qid"])
+        original_query = row["query"]
+        relevant = qrels.get(qid, set())
+
+        print(f"  [{i}/{total}] BM25 qid={qid}: \"{original_query}\"")
+
+        t0 = time.time()
+        safe_query, search_results = searcher.expand_and_search(original_query)
+        elapsed = time.time() - t0
+
+        mrr = compute_mrr(search_results, relevant, cutoff=cutoff)
+
+        results_list.append({
+            "queryid": qid,
+            "method": "bm25",
+            "q_terms_original": count_terms(original_query),
+            "q_terms_expanded": count_terms(original_query),
+            "time_seconds": round(elapsed, 4),
+            "time_first_pass": round(elapsed, 4),
+            "time_get_texts": 0.0,
+            "time_llm": 0.0,
+            "time_second_pass": 0.0,
+            "mrr": round(mrr, 6),
+        })
+
+        print(f"         MRR@{cutoff}={mrr:.4f}  time={elapsed:.3f}s  "
+              f"terms: {count_terms(original_query)} (sin expansión)")
+
+    return results_list
+
+
 def run_prf_benchmark(
     queries: pd.DataFrame,
     qrels: dict[str, set[str]],
     indexer: BaseIndexer,
+    cutoff: int = 10,
 ) -> list[dict]:
     """
     Run the PRF expansion pipeline over all queries and collect metrics.
@@ -164,8 +215,9 @@ def run_prf_benchmark(
         t0 = time.time()
         expanded_query, search_results = expander.expand_and_search(original_query)
         elapsed = time.time() - t0
+        timings = getattr(expander, "last_timings", {})
 
-        mrr = compute_mrr(search_results, relevant)
+        mrr = compute_mrr(search_results, relevant, cutoff=cutoff)
 
         results_list.append({
             "queryid": qid,
@@ -173,10 +225,14 @@ def run_prf_benchmark(
             "q_terms_original": count_terms(original_query),
             "q_terms_expanded": count_terms(expanded_query),
             "time_seconds": round(elapsed, 4),
+            "time_first_pass": round(timings.get("time_first_pass", 0.0), 4),
+            "time_get_texts": 0.0,
+            "time_llm": 0.0,
+            "time_second_pass": round(timings.get("time_second_pass", 0.0), 4),
             "mrr": round(mrr, 6),
         })
 
-        print(f"         MRR={mrr:.4f}  time={elapsed:.3f}s  "
+        print(f"         MRR@{cutoff}={mrr:.4f}  time={elapsed:.3f}s  "
               f"terms: {count_terms(original_query)}→{count_terms(expanded_query)}")
 
     return results_list
@@ -186,6 +242,7 @@ def run_rag_benchmark(
     queries: pd.DataFrame,
     qrels: dict[str, set[str]],
     indexer: BaseIndexer,
+    cutoff: int = 10,
 ) -> list[dict]:
     """
     Run the RAG expansion pipeline over all queries and collect metrics.
@@ -206,8 +263,9 @@ def run_rag_benchmark(
         t0 = time.time()
         expanded_query, search_results = expander.expand_and_search(original_query)
         elapsed = time.time() - t0
+        timings = getattr(expander, "last_timings", {})
 
-        mrr = compute_mrr(search_results, relevant)
+        mrr = compute_mrr(search_results, relevant, cutoff=cutoff)
 
         results_list.append({
             "queryid": qid,
@@ -215,10 +273,16 @@ def run_rag_benchmark(
             "q_terms_original": count_terms(original_query),
             "q_terms_expanded": count_terms(expanded_query),
             "time_seconds": round(elapsed, 4),
+            "time_first_pass": round(timings.get("time_first_pass", 0.0), 4),
+            "time_get_texts": round(timings.get("time_get_texts", 0.0), 4),
+            "time_llm": round(timings.get("time_llm", 0.0), 4),
+            "time_second_pass": round(timings.get("time_second_pass", 0.0), 4),
             "mrr": round(mrr, 6),
         })
 
-        print(f"         MRR={mrr:.4f}  time={elapsed:.3f}s  "
+        print(f"         MRR@{cutoff}={mrr:.4f}  time={elapsed:.3f}s  "
+              f"[1st:{timings.get('time_first_pass', 0.0):.3f}s, texts:{timings.get('time_get_texts', 0.0):.3f}s, "
+              f"llm:{timings.get('time_llm', 0.0):.3f}s, 2nd:{timings.get('time_second_pass', 0.0):.3f}s]  "
               f"terms: {count_terms(original_query)}→{count_terms(expanded_query)}")
 
     return results_list
@@ -236,7 +300,7 @@ def export_results(
     Parameters
     ----------
     results : list[dict]
-        Combined list of metric dicts from both PRF and RAG runs.
+        Combined list of metric dicts from BM25, PRF and RAG runs.
     output_path : str | None
         Destination CSV path. Defaults to ``config.OUTPUT_DIR/benchmark_results.csv``.
 
@@ -258,6 +322,10 @@ def export_results(
         "q_terms_original",
         "q_terms_expanded",
         "time_seconds",
+        "time_first_pass",
+        "time_get_texts",
+        "time_llm",
+        "time_second_pass",
         "mrr",
     ]
 
@@ -277,9 +345,11 @@ def run_benchmark(
     output_path: str | None = None,
     max_queries: int | None = None,
     offset: int = 0,
+    methods: list[str] | None = None,
+    cutoff: int = 10,
 ) -> str:
     """
-    Run the full benchmark: PRF + RAG over dev queries, export to CSV.
+    Run the benchmark (BM25, PRF, RAG) over dev queries and export to CSV.
 
     Parameters
     ----------
@@ -296,6 +366,11 @@ def run_benchmark(
         Number of queries to skip from the beginning (default 0). Applied
         after filtering for queries with qrels. Allows multi-pass execution
         over large query sets.
+    methods : list[str] | None
+        List of methods to evaluate: "bm25", "prf", "rag".
+        Defaults to all three: ["bm25", "prf", "rag"].
+    cutoff : int
+        Cutoff threshold for MRR calculation (default 10 for MRR@10).
 
     Returns
     -------
@@ -304,6 +379,16 @@ def run_benchmark(
     """
     if not pt.started():
         pt.init()
+
+    valid_methods = {"bm25", "prf", "rag"}
+    if methods is None:
+        selected_methods = ["bm25", "prf", "rag"]
+    else:
+        selected_methods = [m.lower().strip() for m in methods if m.lower().strip() in valid_methods]
+        if not selected_methods:
+            raise ValueError(
+                f"No se especificaron métodos válidos. Opciones disponibles: {sorted(list(valid_methods))}"
+            )
 
     # Load data
     print("=" * 65)
@@ -330,7 +415,9 @@ def run_benchmark(
         print(f"   Limitado a         : {max_queries}")
 
     print(f"   Queries a evaluar  : {len(queries_with_qrels):,}"
-          f"  (rango {offset}–{offset + len(queries_with_qrels) - 1}")
+          f"  (rango {offset}–{offset + len(queries_with_qrels) - 1})")
+    print(f"   Métodos a ejecutar : {', '.join(selected_methods).upper()}")
+    print(f"   Métrica principal  : MRR@{cutoff}")
 
     print()
 
@@ -344,51 +431,79 @@ def run_benchmark(
             "Ejecute primero el proceso de indexación."
         )
 
-    # Run PRF benchmark
-    print("=" * 65)
-    print("🔄 Ejecutando benchmark PRF...")
-    print("=" * 65)
-    t0 = time.time()
-    prf_results = run_prf_benchmark(queries_with_qrels, qrels, indexer)
-    prf_time = time.time() - t0
-    prf_mrr_avg = (
-        sum(r["mrr"] for r in prf_results) / len(prf_results)
-        if prf_results
-        else 0.0
-    )
-    print(f"\n   PRF completado: {len(prf_results)} queries en {prf_time:.1f}s")
-    print(f"   MRR promedio PRF: {prf_mrr_avg:.4f}")
-    print()
+    all_results: list[dict] = []
+    stats_summary: dict[str, dict[str, float]] = {}
 
-    # Run RAG benchmark
-    print("=" * 65)
-    print("🤖 Ejecutando benchmark RAG...")
-    print("=" * 65)
-    t0 = time.time()
-    rag_results = run_rag_benchmark(queries_with_qrels, qrels, indexer)
-    rag_time = time.time() - t0
-    rag_mrr_avg = (
-        sum(r["mrr"] for r in rag_results) / len(rag_results)
-        if rag_results
-        else 0.0
-    )
-    print(f"\n   RAG completado: {len(rag_results)} queries en {rag_time:.1f}s")
-    print(f"   MRR promedio RAG: {rag_mrr_avg:.4f}")
-    print()
+    # 1. Run BM25 baseline benchmark
+    if "bm25" in selected_methods:
+        print("=" * 65)
+        print("⚡ Ejecutando benchmark BM25 (baseline sin expansión)...")
+        print("=" * 65)
+        t0 = time.time()
+        bm25_results = run_bm25_benchmark(queries_with_qrels, qrels, indexer, cutoff=cutoff)
+        bm25_time = time.time() - t0
+        bm25_mrr_avg = (
+            sum(r["mrr"] for r in bm25_results) / len(bm25_results)
+            if bm25_results
+            else 0.0
+        )
+        stats_summary["bm25"] = {"mrr": bm25_mrr_avg, "time": bm25_time, "count": len(bm25_results)}
+        all_results.extend(bm25_results)
+        print(f"\n   BM25 completado: {len(bm25_results)} queries en {bm25_time:.1f}s")
+        print(f"   MRR@{cutoff} promedio BM25: {bm25_mrr_avg:.4f}")
+        print()
 
-    # Combine and export
-    all_results = prf_results + rag_results
+    # 2. Run PRF benchmark
+    if "prf" in selected_methods:
+        print("=" * 65)
+        print("🔄 Ejecutando benchmark PRF...")
+        print("=" * 65)
+        t0 = time.time()
+        prf_results = run_prf_benchmark(queries_with_qrels, qrels, indexer, cutoff=cutoff)
+        prf_time = time.time() - t0
+        prf_mrr_avg = (
+            sum(r["mrr"] for r in prf_results) / len(prf_results)
+            if prf_results
+            else 0.0
+        )
+        stats_summary["prf"] = {"mrr": prf_mrr_avg, "time": prf_time, "count": len(prf_results)}
+        all_results.extend(prf_results)
+        print(f"\n   PRF completado: {len(prf_results)} queries en {prf_time:.1f}s")
+        print(f"   MRR@{cutoff} promedio PRF: {prf_mrr_avg:.4f}")
+        print()
+
+    # 3. Run RAG benchmark
+    if "rag" in selected_methods:
+        print("=" * 65)
+        print("🤖 Ejecutando benchmark RAG...")
+        print("=" * 65)
+        t0 = time.time()
+        rag_results = run_rag_benchmark(queries_with_qrels, qrels, indexer, cutoff=cutoff)
+        rag_time = time.time() - t0
+        rag_mrr_avg = (
+            sum(r["mrr"] for r in rag_results) / len(rag_results)
+            if rag_results
+            else 0.0
+        )
+        stats_summary["rag"] = {"mrr": rag_mrr_avg, "time": rag_time, "count": len(rag_results)}
+        all_results.extend(rag_results)
+        print(f"\n   RAG completado: {len(rag_results)} queries en {rag_time:.1f}s")
+        print(f"   MRR@{cutoff} promedio RAG: {rag_mrr_avg:.4f}")
+        print()
+
+    # Export to CSV
     csv_path = export_results(all_results, output_path)
 
     print("=" * 65)
     print("✅ Benchmark finalizado")
     print("=" * 65)
-    print(f"   Queries evaluadas  : {len(queries_with_qrels)}")
-    print(f"   MRR promedio PRF   : {prf_mrr_avg:.4f}")
-    print(f"   MRR promedio RAG   : {rag_mrr_avg:.4f}")
-    print(f"   Tiempo total PRF   : {prf_time:.1f}s")
-    print(f"   Tiempo total RAG   : {rag_time:.1f}s")
-    print(f"   CSV exportado a    : {csv_path}")
+    print(f"   Queries evaluadas   : {len(queries_with_qrels)}")
+    print(f"   Métrica de ranking  : MRR@{cutoff}")
+    for method_key in selected_methods:
+        s = stats_summary[method_key]
+        name = {"bm25": "BM25 (baseline)", "prf": "PRF (DFR Bo1)", "rag": "RAG (LLM)"}[method_key]
+        print(f"   MRR@{cutoff} {name:<18}: {s['mrr']:.4f}  (tiempo total: {s['time']:.1f}s)")
+    print(f"   CSV exportado a     : {csv_path}")
     print()
 
     return csv_path
