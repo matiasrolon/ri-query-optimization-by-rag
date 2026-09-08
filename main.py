@@ -4,9 +4,9 @@ Main entry point — MS MARCO passage indexing & query expansion benchmark.
 
 1. Reads the indexing method from .env (INDEXING_METHOD) and ensures the
    index is available (loading from disk or building from scratch).
-2. Runs both query expansion strategies (PRF and RAG) over the development
-   queries, measuring per-query MRR and resolution time.
-3. Exports combined results to ``output/benchmark_results.csv``.
+2. Runs BM25 baseline, PRF, and RAG query expansion benchmarks over the
+   development queries, measuring per-query MRR@10 and time breakdown.
+3. Exports combined results to ``output/benchmark_results_<timestamp>.csv``.
 
 Usage:
     python main.py                              # full benchmark
@@ -62,7 +62,7 @@ def run_evaluation(
     max_queries: int | None = None,
     offset: int = 0,
 ) -> None:
-    """Run PRF + RAG benchmarks and export CSV."""
+    """Run BM25 + PRF + RAG benchmarks and export CSV."""
     from evaluation.benchmark import run_benchmark
 
     csv_path = run_benchmark(max_queries=max_queries, offset=offset)
@@ -71,7 +71,7 @@ def run_evaluation(
 
 def main() -> None:
     parser = argparse.ArgumentParser(
-        description="MS MARCO query expansion benchmark (PRF vs RAG)"
+        description="MS MARCO query expansion benchmark (BM25 vs PRF vs RAG)"
     )
     parser.add_argument(
         "--max-queries",

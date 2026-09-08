@@ -145,10 +145,12 @@ class PRFExpander:
             query.  Columns include ``qid``, ``docno``, ``score``,
             ``rank``.
         """
-        _, results = self.expand_and_search(query)
+        _, results, _ = self.expand_and_search(query)
         return results
 
-    def expand_and_search(self, query: str) -> tuple[str, pd.DataFrame]:
+    def expand_and_search(
+        self, query: str
+    ) -> tuple[str, pd.DataFrame, dict[str, float]]:
         """
         Expand the query and run the second-pass retrieval in one call.
 
@@ -159,11 +161,44 @@ class PRFExpander:
 
         Returns
         -------
-        tuple[str, pd.DataFrame]
-            A tuple of (expanded_query, search_results).
+        tuple[str, pd.DataFrame, dict[str, float]]
+            A tuple of (expanded_query, search_results, timings_dict).
         """
-        expanded_query = self.expand(query)
-        return expanded_query, self._second_pass.search(expanded_query)
+        import time
+
+        safe_query = sanitize_query_str(query)
+
+        t0 = time.time()
+        first_results = self._first_pass.search(safe_query)
+        elapsed_first = time.time() - t0
+
+        if first_results.empty:
+            timings = {
+                "time_first_pass": round(elapsed_first, 4),
+                "time_text_fetch": 0.0,
+                "time_llm": 0.0,
+                "time_second_pass": 0.0,
+            }
+            return safe_query, first_results, timings
+
+        t1 = time.time()
+        expanded_df = self._qe.transform(first_results)
+        if expanded_df.empty or "query" not in expanded_df.columns:
+            expanded_query = safe_query
+        else:
+            expanded_query = expanded_df.iloc[0]["query"]
+
+        results = self._second_pass.search(expanded_query)
+        elapsed_second = time.time() - t1
+
+        timings = {
+            "time_first_pass": round(elapsed_first, 4),
+            "time_text_fetch": 0.0,
+            "time_llm": 0.0,
+            "time_second_pass": round(elapsed_second, 4),
+        }
+
+        return expanded_query, results, timings
 
     def search_batch(self, topics: pd.DataFrame) -> pd.DataFrame:
         """
@@ -182,8 +217,7 @@ class PRFExpander:
         """
         all_results = []
         for _, row in topics.iterrows():
-            expanded = self.expand(row["query"])
-            result = self._second_pass.search(expanded)
+            expanded, result, _ = self.expand_and_search(row["query"])
             result["qid"] = row["qid"]
             all_results.append(result)
 

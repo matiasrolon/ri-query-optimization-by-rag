@@ -107,22 +107,25 @@ class BaseIndexer(ABC):
             return results["text"].tolist()
         return self._texts_from_collection(results["docno"].tolist())
 
-    @staticmethod
-    def _texts_from_collection(docnos: list[str]) -> list[str]:
-        """Look up document texts from the TSV collection file."""
-        docno_set = set(docnos)
-        mapping: dict[str, str] = {}
-        try:
-            with open(config.COLLECTION_FILE, "r", encoding="utf-8") as f:
-                for line in f:
-                    parts = line.rstrip("\n").split("\t", 1)
-                    if len(parts) == 2 and parts[0] in docno_set:
-                        mapping[parts[0]] = parts[1]
-                        if len(mapping) == len(docno_set):
-                            break
-        except FileNotFoundError:
-            pass
-        return [mapping.get(d, "") for d in docnos]
+    _text_cache: dict[str, str] = {}
+
+    @classmethod
+    def _texts_from_collection(cls, docnos: list[str]) -> list[str]:
+        """Look up document texts from the TSV collection file with in-memory caching."""
+        missing = set(docnos) - set(cls._text_cache.keys())
+        if missing:
+            try:
+                with open(config.COLLECTION_FILE, "r", encoding="utf-8") as f:
+                    for line in f:
+                        parts = line.rstrip("\n").split("\t", 1)
+                        if len(parts) == 2 and parts[0] in missing:
+                            cls._text_cache[parts[0]] = parts[1]
+                            missing.remove(parts[0])
+                            if not missing:
+                                break
+            except FileNotFoundError:
+                pass
+        return [cls._text_cache.get(d, "") for d in docnos]
 
     # ── Collection statistics ─────────────────────────────────────────────
 

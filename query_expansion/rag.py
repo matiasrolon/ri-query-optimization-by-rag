@@ -45,7 +45,7 @@ from query_expansion.utils import (
 logger = logging.getLogger(__name__)
 
 # ── Default LLM settings ──────────────────────────────────────────────────
-_DEFAULT_MAX_TOKENS = 256
+_DEFAULT_MAX_TOKENS = 48
 _DEFAULT_TEMPERATURE = 0.0
 _DEFAULT_TIMEOUT = 300  # 5 minutes per request
 _DEFAULT_MAX_RETRIES = 3
@@ -53,6 +53,7 @@ _DEFAULT_MAX_RETRIES = 3
 _SYSTEM_PROMPT_TEMPLATE = textwrap.dedent("""\
     You are an expert Search Engine Indexing Specialist.
     Given a user's original search query and a set of relevant document passages, your task is to generate EXACTLY {fb_terms} additional, highly specific, technical, and domain-discriminative expansion keywords.
+    Document passages are ordered by relevance; prefer words from or related to the first ones.
 
     Rules:
     - Output ONLY a space-separated list of EXACTLY {fb_terms} new expansion keywords.
@@ -64,6 +65,7 @@ _SYSTEM_PROMPT_TEMPLATE = textwrap.dedent("""\
     Examples:
 
     Example 1:
+    fb_terms=5
     Original query: treating tension headaches
     Retrieved passages:
     [1] Ibuprofen and acetaminophen are common over-the-counter pain relievers for neurological stress and migraines.
@@ -71,11 +73,20 @@ _SYSTEM_PROMPT_TEMPLATE = textwrap.dedent("""\
     migraine ibuprofen stress analgesics neurological
 
     Example 2:
+    fb_terms=2
     Original query: prime rate in canada
     Retrieved passages:
     [1] The Bank of Canada sets the overnight lending rate affecting commercial mortgage interest and inflation.
     Additional expansion keywords:
-    interest central-bank lending inflation monetary
+    interest banking
+
+    Example 3:
+    fb_terms=4
+    Original query: how do solar panels generate electricity
+    Retrieved passages:
+    [1] Photovoltaic cells made of crystalline silicon absorb photons, exciting electrons across the semiconductor junction to produce direct current.
+    Additional expansion keywords:
+    photovoltaic silicon semiconductor photons
 """)
 
 
@@ -261,7 +272,44 @@ class RAGExpander:
         str
             The post-processed expanded query (plain text, no weights).
         """
-        # First-pass retrieval
+        expanded, _, _ = self.expand_and_search(query)
+        return expanded
+
+    def search(self, query: str) -> pd.DataFrame:
+        """
+        End-to-end RAG retrieval: first-pass → LLM expansion → second-pass.
+
+        Parameters
+        ----------
+        query : str
+            The original user query.
+
+        Returns
+        -------
+        pd.DataFrame
+            Retrieval results from the second pass with the
+            reformulated query.
+        """
+        _, results, _ = self.expand_and_search(query)
+        return results
+
+    def expand_and_search(
+        self, query: str
+    ) -> tuple[str, pd.DataFrame, dict[str, float]]:
+        """
+        Expand the query and run the second-pass retrieval in one call.
+
+        Parameters
+        ----------
+        query : str
+            The original user query.
+
+        Returns
+        -------
+        tuple[str, pd.DataFrame, dict[str, float]]
+            A tuple of (expanded_query, search_results, timings_dict).
+        """
+        # 1. First-pass retrieval
         t0 = time.time()
         safe_query = sanitize_query_str(query)
         first_results = self._first_pass.search(safe_query)
@@ -282,37 +330,51 @@ class RAGExpander:
             logger.info("[1st pass] top results: %s", docs_summary)
 
         if first_results.empty:
-            return safe_query
+            timings = {
+                "time_first_pass": round(elapsed_first, 4),
+                "time_text_fetch": 0.0,
+                "time_llm": 0.0,
+                "time_second_pass": 0.0,
+            }
+            return safe_query, first_results, timings
 
-        # Get passage texts
+        # 2. Get passage texts
+        t0 = time.time()
         passages = self._indexer.get_texts(first_results)
         passages = [p for p in passages if p.strip()]
+        elapsed_text = time.time() - t0
+        if self.verbose:
+            print(f"  ⏱  Text fetch          : {elapsed_text:.3f}s")
 
         if not passages:
-            return safe_query
+            timings = {
+                "time_first_pass": round(elapsed_first, 4),
+                "time_text_fetch": round(elapsed_text, 4),
+                "time_llm": 0.0,
+                "time_second_pass": 0.0,
+            }
+            return safe_query, first_results, timings
 
-        # Ask the LLM to reformulate the query
+        # 3. Ask the LLM to reformulate the query
         t0 = time.time()
         raw_llm_output = self._call_llm(query, passages)
-        llm_elapsed = time.time() - t0
+        elapsed_llm = time.time() - t0
         if self.verbose:
-            print(f"  ⏱  Llamada al LLM      : {llm_elapsed:.3f}s")
+            print(f"  ⏱  Llamada al LLM      : {elapsed_llm:.3f}s")
             print(f"  📝 Salida cruda LLM     : \"{raw_llm_output}\"")
 
         logger.info(
             "[LLM] raw output (%.3fs): '%s'",
-            llm_elapsed, raw_llm_output,
+            elapsed_llm, raw_llm_output,
         )
 
-        # Option B: Plain Text Query Expansion (No Weights)
-        # Concatenates original query and valid LLM expansion terms in plain text
+        # Post-process LLM output
         expanded = postprocess_expanded_query(
             original_query=query,
             raw_expanded_text=raw_llm_output,
             index=self._indexer._index,
             fb_terms=self.fb_terms,
         )
-
 
         if self.verbose:
             print(f"  📝 Query post-procesada : \"{expanded}\"")
@@ -322,42 +384,7 @@ class RAGExpander:
             query, expanded,
         )
 
-        return expanded
-
-    def search(self, query: str) -> pd.DataFrame:
-        """
-        End-to-end RAG retrieval: first-pass → LLM expansion → second-pass.
-
-        Parameters
-        ----------
-        query : str
-            The original user query.
-
-        Returns
-        -------
-        pd.DataFrame
-            Retrieval results from the second pass with the
-            reformulated query.
-        """
-        _, results = self.expand_and_search(query)
-        return results
-
-    def expand_and_search(self, query: str) -> tuple[str, pd.DataFrame]:
-        """
-        Expand the query and run the second-pass retrieval in one call.
-
-        Parameters
-        ----------
-        query : str
-            The original user query.
-
-        Returns
-        -------
-        tuple[str, pd.DataFrame]
-            A tuple of (expanded_query, search_results).
-        """
-        expanded = self.expand(query)
-
+        # 4. Second-pass retrieval
         t0 = time.time()
         results = self._second_pass.search(expanded)
         elapsed_second = time.time() - t0
@@ -376,7 +403,14 @@ class RAGExpander:
             )
             logger.info("[2nd pass] top results: %s", docs_summary)
 
-        return expanded, results
+        timings = {
+            "time_first_pass": round(elapsed_first, 4),
+            "time_text_fetch": round(elapsed_text, 4),
+            "time_llm": round(elapsed_llm, 4),
+            "time_second_pass": round(elapsed_second, 4),
+        }
+
+        return expanded, results, timings
 
     def search_batch(self, topics: pd.DataFrame) -> pd.DataFrame:
         """
@@ -395,8 +429,7 @@ class RAGExpander:
         """
         all_results = []
         for _, row in topics.iterrows():
-            expanded = self.expand(row["query"])
-            result = self._second_pass.search(expanded)
+            expanded, result, _ = self.expand_and_search(row["query"])
             result["qid"] = row["qid"]
             all_results.append(result)
 

@@ -61,7 +61,7 @@ class TerrierIndexer(BaseIndexer):
             shutil.rmtree(self.index_path)
 
         indexer = pt.IterDictIndexer(
-            self.index_path, meta={"docno": 20}, threads=threads
+            self.index_path, meta={"docno": 20, "text": 4096}, threads=threads
         )
 
         t0 = time.time()
