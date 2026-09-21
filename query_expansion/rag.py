@@ -38,8 +38,6 @@ from indexing.base import BaseIndexer
 from query_expansion.utils import (
     sanitize_query_str,
     postprocess_expanded_query,
-    postprocess_llm_weighted_query,
-    postprocess_fixed_lambda_query,
 )
 
 logger = logging.getLogger(__name__)
@@ -123,20 +121,19 @@ class RAGExpander:
         when running batch evaluations to reduce noise.
     max_tokens : int
         Maximum number of tokens in the LLM response.
-    temperature : float
-        Sampling temperature for the LLM.
+        If True, print progress metrics to stdout.
     """
 
     def __init__(
         self,
+        indexer: BaseIndexer | None = None,
         fb_docs: int | None = None,
         fb_terms: int | None = None,
         fb_lambda: float | None = None,
-        indexer: BaseIndexer | None = None,
         model: str | None = None,
         base_url: str | None = None,
         api_key: str | None = None,
-        verbose: bool = True,
+        verbose: bool = False,
         max_tokens: int = _DEFAULT_MAX_TOKENS,
         temperature: float = _DEFAULT_TEMPERATURE,
     ) -> None:
@@ -180,8 +177,8 @@ class RAGExpander:
 
     # ── Dynamic prompt construction ───────────────────────────────────────
 
-    def _build_system_prompt(self, original_query: str) -> str:
-        """Build a system prompt requesting exactly fb_terms weighted expansion terms."""
+    def _build_system_prompt(self) -> str:
+        """Build a system prompt requesting exactly fb_terms expansion terms."""
         return _SYSTEM_PROMPT_TEMPLATE.format(
             fb_terms=self.fb_terms,
         )
@@ -203,7 +200,7 @@ class RAGExpander:
 
     def _call_llm(self, original_query: str, passages: list[str]) -> str:
         """Call the LLM to reformulate the query, with retry on timeout."""
-        system_prompt = self._build_system_prompt(original_query)
+        system_prompt = self._build_system_prompt()
         user_prompt = self._build_user_prompt(original_query, passages)
 
         if self.verbose:
@@ -224,43 +221,32 @@ class RAGExpander:
                     max_tokens=self.max_tokens,
                     temperature=self.temperature,
                 )
-
-                reformulated = response.choices[0].message.content.strip()
-
-                # Safety: if the LLM returns nothing useful, fall back to
-                # the original query.
-                if not reformulated:
-                    return original_query
-
-                return reformulated
-
+                text = response.choices[0].message.content or ""
+                return text.strip()
             except (APITimeoutError, APIConnectionError) as exc:
                 last_exc = exc
-                wait = 2 ** attempt  # 2s, 4s, 8s
                 logger.warning(
-                    "LLM timeout (intento %d/%d) para query '%s'. "
-                    "Reintentando en %ds...",
-                    attempt, _DEFAULT_MAX_RETRIES, original_query[:60], wait,
+                    "LLM timeout/connection error (intento %d/%d): %s",
+                    attempt, _DEFAULT_MAX_RETRIES, exc,
                 )
-                time.sleep(wait)
+                if self.verbose:
+                    print(
+                        f"  ⚠️ Timeout LLM (intento {attempt}/{_DEFAULT_MAX_RETRIES}). Reintentando..."
+                    )
+                time.sleep(2.0 * attempt)
+            except Exception as exc:
+                logger.error("Error inesperado en LLM: %s", exc)
+                raise
 
-        # All retries exhausted — fall back to the original query
-        logger.error(
-            "LLM no respondió tras %d intentos para query '%s'. "
-            "Usando query original. Error: %s",
-            _DEFAULT_MAX_RETRIES, original_query[:60], last_exc,
-        )
-        return original_query
+        raise RuntimeError(
+            f"LLM request falló tras {_DEFAULT_MAX_RETRIES} intentos"
+        ) from last_exc
 
     # ── Public API ─────────────────────────────────────────────────────────
 
     def expand(self, query: str) -> str:
         """
         Expand a single query using RAG-based LLM reformulation.
-
-        The LLM output is post-processed to apply the same linguistic
-        treatment as the index (stopwords, stemming, lexicon filtering)
-        and filtered to terms that appear in the feedback documents.
 
         Parameters
         ----------
@@ -321,13 +307,6 @@ class RAGExpander:
             "[1st pass] query='%s' | %d docs retrieved in %.3fs",
             safe_query, len(first_results), elapsed_first,
         )
-        if not first_results.empty:
-            top_docs = first_results.head(10)
-            docs_summary = ", ".join(
-                f"{r['docno']}({r['score']:.4f})"
-                for _, r in top_docs.iterrows()
-            )
-            logger.info("[1st pass] top results: %s", docs_summary)
 
         if first_results.empty:
             timings = {
@@ -335,6 +314,8 @@ class RAGExpander:
                 "time_text_fetch": 0.0,
                 "time_llm": 0.0,
                 "time_second_pass": 0.0,
+                "n_terms_proposed": 0,
+                "n_terms_kept": 0,
             }
             return safe_query, first_results, timings
 
@@ -352,6 +333,8 @@ class RAGExpander:
                 "time_text_fetch": round(elapsed_text, 4),
                 "time_llm": 0.0,
                 "time_second_pass": 0.0,
+                "n_terms_proposed": 0,
+                "n_terms_kept": 0,
             }
             return safe_query, first_results, timings
 
@@ -369,7 +352,7 @@ class RAGExpander:
         )
 
         # Post-process LLM output
-        expanded = postprocess_expanded_query(
+        expanded, n_proposed, n_kept = postprocess_expanded_query(
             original_query=query,
             raw_expanded_text=raw_llm_output,
             index=self._indexer._index,
@@ -408,6 +391,8 @@ class RAGExpander:
             "time_text_fetch": round(elapsed_text, 4),
             "time_llm": round(elapsed_llm, 4),
             "time_second_pass": round(elapsed_second, 4),
+            "n_terms_proposed": n_proposed,
+            "n_terms_kept": n_kept,
         }
 
         return expanded, results, timings

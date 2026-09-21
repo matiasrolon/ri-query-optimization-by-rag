@@ -31,8 +31,12 @@ import pyterrier as pt
 
 import config
 from indexing import get_indexer
-from indexing.base import BaseIndexer
-from query_expansion.utils import sanitize_query_str
+from query_expansion.utils import (
+    sanitize_query_str,
+    sanitize_query,
+    stem_term,
+    is_stopword,
+)
 
 
 class PRFExpander:
@@ -185,8 +189,18 @@ class PRFExpander:
         expanded_df = self._qe.transform(first_results)
         if expanded_df.empty or "query" not in expanded_df.columns:
             expanded_query = safe_query
+            n_prf = 0
         else:
             expanded_query = expanded_df.iloc[0]["query"]
+            clean_exp = expanded_query.replace("applypipeline:off ", "")
+            exp_parts = clean_exp.split()
+            orig_stemmed = set(stem_term(t) for t in sanitize_query(query) if not is_stopword(t))
+            prf_new_terms = [
+                t.split("^")[0]
+                for t in exp_parts
+                if stem_term(t.split("^")[0]) not in orig_stemmed
+            ]
+            n_prf = len(prf_new_terms)
 
         results = self._second_pass.search(expanded_query)
         elapsed_second = time.time() - t1
@@ -196,6 +210,8 @@ class PRFExpander:
             "time_text_fetch": 0.0,
             "time_llm": 0.0,
             "time_second_pass": round(elapsed_second, 4),
+            "n_terms_proposed": n_prf,
+            "n_terms_kept": n_prf,
         }
 
         return expanded_query, results, timings
