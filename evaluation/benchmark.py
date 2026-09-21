@@ -181,6 +181,8 @@ def run_bm25_benchmark(
             "method": "bm25",
             "q_terms_original": count_terms(original_query),
             "q_terms_expanded": count_terms(safe_query),
+            "n_terms_proposed": 0,
+            "n_terms_kept": 0,
             "time_seconds": round(elapsed_first, 4),
             "time_first_pass": round(elapsed_first, 4),
             "time_text_fetch": 0.0,
@@ -227,11 +229,16 @@ def run_prf_benchmark(
 
         mrr = compute_mrr(search_results, relevant, k=10)
 
+        n_proposed = timings.get("n_terms_proposed", 0)
+        n_kept = timings.get("n_terms_kept", 0)
+
         results_list.append({
             "queryid": qid,
             "method": "prf",
             "q_terms_original": count_terms(original_query),
             "q_terms_expanded": count_terms(expanded_query),
+            "n_terms_proposed": n_proposed,
+            "n_terms_kept": n_kept,
             "time_seconds": round(elapsed, 4),
             "time_first_pass": timings.get("time_first_pass", 0.0),
             "time_text_fetch": timings.get("time_text_fetch", 0.0),
@@ -242,15 +249,17 @@ def run_prf_benchmark(
 
         logger.info(
             "[PRF] qid=%s | original='%s' | expanded='%s' | "
-            "MRR@10=%.4f | time=%.3fs | terms: %d→%d",
+            "MRR@10=%.4f | time=%.3fs | terms: %d→%d (proposed: %d, kept: %d)",
             qid, original_query, expanded_query,
             mrr, elapsed,
             count_terms(original_query), count_terms(expanded_query),
+            n_proposed, n_kept,
         )
 
         print(f"         📝 Query Expandida: \"{expanded_query}\"")
         print(f"         MRR@10={mrr:.4f}  time={elapsed:.3f}s  "
-              f"terms: {count_terms(original_query)}→{count_terms(expanded_query)}")
+              f"terms: {count_terms(original_query)}→{count_terms(expanded_query)} "
+              f"(propuestos: {n_proposed}, aceptados: {n_kept})")
 
     return results_list
 
@@ -282,11 +291,16 @@ def run_rag_benchmark(
 
         mrr = compute_mrr(search_results, relevant, k=10)
 
+        n_proposed = timings.get("n_terms_proposed", 0)
+        n_kept = timings.get("n_terms_kept", 0)
+
         results_list.append({
             "queryid": qid,
             "method": "rag",
             "q_terms_original": count_terms(original_query),
             "q_terms_expanded": count_terms(expanded_query),
+            "n_terms_proposed": n_proposed,
+            "n_terms_kept": n_kept,
             "time_seconds": round(elapsed, 4),
             "time_first_pass": timings.get("time_first_pass", 0.0),
             "time_text_fetch": timings.get("time_text_fetch", 0.0),
@@ -297,15 +311,17 @@ def run_rag_benchmark(
 
         logger.info(
             "[RAG] qid=%s | original='%s' | expanded='%s' | "
-            "MRR@10=%.4f | time=%.3fs | terms: %d→%d",
+            "MRR@10=%.4f | time=%.3fs | terms: %d→%d (proposed: %d, kept: %d)",
             qid, original_query, expanded_query,
             mrr, elapsed,
             count_terms(original_query), count_terms(expanded_query),
+            n_proposed, n_kept,
         )
 
         print(f"         📝 Query Expandida: \"{expanded_query}\"")
         print(f"         MRR@10={mrr:.4f}  time={elapsed:.3f}s  "
-              f"terms: {count_terms(original_query)}→{count_terms(expanded_query)}")
+              f"terms: {count_terms(original_query)}→{count_terms(expanded_query)} "
+              f"(propuestos: {n_proposed}, aceptados: {n_kept})")
 
     return results_list
 
@@ -343,6 +359,8 @@ def export_results(
         "method",
         "q_terms_original",
         "q_terms_expanded",
+        "n_terms_proposed",
+        "n_terms_kept",
         "time_seconds",
         "time_first_pass",
         "time_text_fetch",
