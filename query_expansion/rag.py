@@ -45,7 +45,7 @@ logger = logging.getLogger(__name__)
 # ── Default LLM settings ──────────────────────────────────────────────────
 _DEFAULT_MAX_TOKENS = 48
 _DEFAULT_TEMPERATURE = 0.0
-_DEFAULT_TIMEOUT = 300  # 5 minutes per request
+_DEFAULT_TIMEOUT = 120  # 2 minutes per request (reduced from 300)
 _DEFAULT_MAX_RETRIES = 3
 
 _SYSTEM_PROMPT_TEMPLATE = textwrap.dedent("""\
@@ -236,11 +236,16 @@ class RAGExpander:
                 time.sleep(2.0 * attempt)
             except Exception as exc:
                 logger.error("Error inesperado en LLM: %s", exc)
-                raise
+                last_exc = exc
+                break
 
-        raise RuntimeError(
-            f"LLM request falló tras {_DEFAULT_MAX_RETRIES} intentos"
-        ) from last_exc
+        logger.error(
+            "LLM request falló tras %d intentos para la query '%s'. Aplicando fallback a query original: %s",
+            _DEFAULT_MAX_RETRIES, original_query, last_exc,
+        )
+        if self.verbose:
+            print(f"  ⚠️ LLM no respondió tras {_DEFAULT_MAX_RETRIES} intentos. Fallback a consulta base.")
+        return ""
 
     # ── Public API ─────────────────────────────────────────────────────────
 
