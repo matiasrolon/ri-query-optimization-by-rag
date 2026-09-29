@@ -5,3 +5,5 @@ tbb==2020.3.254
 pandas
 python-dotenv
 openai
+matplotlib
+seaborn

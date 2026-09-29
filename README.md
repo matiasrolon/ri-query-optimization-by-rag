@@ -162,3 +162,31 @@ python main.py --max-queries 4000 --offset 0
 
 > [!TIP]
 > Para datasets muy grandes (100k+ queries), se recomienda ejecutar el benchmark en pasadas incrementales usando `--offset` y `--max-queries`. Los resultados se exportan con timestamp en el nombre del archivo para evitar sobreescrituras.
+
+## Módulo de Análisis de Resultados
+
+El paquete `analysis` permite procesar un archivo CSV generado por una ejecución del benchmark y generar automáticamente visualizaciones y reportes detallados en alta resolución:
+
+```bash
+# Ejecutar análisis sobre un archivo de resultados
+python run_analysis.py --file "/ruta/a/benchmark_results_<timestamp>.csv"
+
+# O como módulo Python:
+python -m analysis --file "/ruta/a/benchmark_results_<timestamp>.csv"
+```
+
+### Gráficos generados
+
+Las figuras se almacenan automáticamente en `./figures/<nombre_del_archivo>/`:
+
+1. **`01_gain_loss_per_query.png`**: Análisis de ganancias y pérdidas por consulta.
+   - Perfil continuo (waterfall) ordenado por $\Delta(q) = RR_{RAG}(q) - RR_{PRF}(q)$.
+   - Histograma de distribución de diferencias y balance neto de consultas mejoradas, neutras y degradadas.
+2. **`02_time_breakdown_stacked.png`**: Barras apiladas del desglose de tiempos de ejecución.
+   - Comparación PRF vs RAG (1ª pasada BM25, Text Fetch, Inferencia LLM, 2ª pasada).
+   - Vista absoluta (segundos) y porcentual (100% stacked).
+   - Cálculo destacado del **tiempo promedio de inferencia LLM** del archivo.
+3. **`03_lexicon_filtering_hallucination.png`**: Filtrado de lexicón y alucinación del LLM.
+   - Ciclo de vida de términos (originales, propuestos por LLM, aceptados en el índice y expandidos).
+   - Cuantificación de la tasa de alucinación (términos fuera del vocabulario de la colección) vs tasa de supervivencia.
+4. **`summary_metrics.json`** y **`summary_report.txt`**: Resumen numérico y reporte textual con todas las métricas agregadas.
