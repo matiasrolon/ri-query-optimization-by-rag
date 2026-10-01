@@ -71,8 +71,10 @@ def test_analyzer_with_synthetic_data():
         fig_dir = os.path.join(tmpdir, "figures")
         m, paths = generate_all_plots(analyzer, output_dir=fig_dir)
         assert os.path.isfile(paths["gain_loss"])
+        assert os.path.isfile(paths["gain_loss_donut"])
         assert os.path.isfile(paths["time_breakdown"])
         assert os.path.isfile(paths["lexicon_filtering"])
+        assert os.path.isfile(paths["terms_distribution"])
         assert os.path.isfile(paths["summary_json"])
         assert os.path.isfile(paths["summary_txt"])
 

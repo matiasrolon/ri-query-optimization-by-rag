@@ -31,7 +31,7 @@ def main() -> int:
         "--output-dir", "-o",
         type=str,
         default=None,
-        help="Directorio base para guardar las figuras (por defecto: figures/<nombre_archivo>/)."
+        help="Directorio base para guardar las figuras (por defecto: output/figures/<nombre_archivo>/)."
     )
     args = parser.parse_args()
 
@@ -40,7 +40,7 @@ def main() -> int:
         return 1
 
     file_stem = os.path.splitext(os.path.basename(args.file))[0]
-    out_dir = args.output_dir or os.path.join("figures", file_stem)
+    out_dir = args.output_dir or os.path.join("output", "figures", file_stem)
 
     print("\n" + "=" * 70)
     print(" 📊 MÓDULO DE ANÁLISIS: QUERY EXPANSION BENCHMARK")
