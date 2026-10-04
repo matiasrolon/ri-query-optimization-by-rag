@@ -48,13 +48,52 @@ _DEFAULT_TEMPERATURE = 0.0
 _DEFAULT_TIMEOUT = 120  # 2 minutes per request (reduced from 300)
 _DEFAULT_MAX_RETRIES = 3
 
-_SYSTEM_PROMPT_TEMPLATE = textwrap.dedent("""\
+_SYSTEM_PROMPT_TEMPLATE_SINGLE = textwrap.dedent("""\
+    You are an expert Search Engine Indexing Specialist.
+    Given a user's original search query and a set of relevant document passages, your task is to generate EXACTLY ONE (1) additional, highly specific, technical, and domain-discriminative expansion keyword.
+    Document passages are ordered by relevance; prefer words from or related to the first ones.
+
+    Rules:
+    - Output EXACTLY ONE single word (ONE single term only, NOT a phrase, NO multiple words, NO punctuation).
+    - Do NOT include or repeat any words already present in the original query.
+    - Do NOT include explanations, numbering, punctuation, or bullet points.
+    - Select a highly specific technical noun, domain synonym, or exact entity name.
+    - DO NOT output generic search words such as: definition, explanation, overview, summary, guide, meaning, type, list, cause, effect, symptom, cost, price, history.
+
+    Examples:
+
+    Example 1:
+    fb_terms=1
+    Original query: prime rate in canada
+    Retrieved passages:
+    [1] The Bank of Canada sets the overnight lending rate affecting commercial mortgage interest and inflation.
+    Additional expansion keyword:
+    interest
+
+    Example 2:
+    fb_terms=1
+    Original query: treating tension headaches
+    Retrieved passages:
+    [1] Ibuprofen and acetaminophen are common over-the-counter pain relievers for neurological stress and migraines.
+    Additional expansion keyword:
+    ibuprofen
+
+    Example 3:
+    fb_terms=1
+    Original query: how do solar panels generate electricity
+    Retrieved passages:
+    [1] Photovoltaic cells made of crystalline silicon absorb photons, exciting electrons across the semiconductor junction to produce direct current.
+    Additional expansion keyword:
+    photovoltaic
+""")
+
+_SYSTEM_PROMPT_TEMPLATE_MULTI = textwrap.dedent("""\
     You are an expert Search Engine Indexing Specialist.
     Given a user's original search query and a set of relevant document passages, your task is to generate EXACTLY {fb_terms} additional, highly specific, technical, and domain-discriminative expansion keywords.
     Document passages are ordered by relevance; prefer words from or related to the first ones.
 
     Rules:
-    - Output ONLY a space-separated list of EXACTLY {fb_terms} new expansion keywords.
+    - Output ONLY a space-separated list of EXACTLY {fb_terms} new expansion keywords (single-word tokens only, no phrases).
     - Do NOT include or repeat any words already present in the original query.
     - Do NOT include explanations, numbering, punctuation, or bullet points.
     - Select highly specific technical nouns, domain synonyms, or exact entity names.
@@ -86,7 +125,6 @@ _SYSTEM_PROMPT_TEMPLATE = textwrap.dedent("""\
     Additional expansion keywords:
     photovoltaic silicon semiconductor photons
 """)
-
 
 
 class RAGExpander:
@@ -179,29 +217,59 @@ class RAGExpander:
 
     def _build_system_prompt(self) -> str:
         """Build a system prompt requesting exactly fb_terms expansion terms."""
-        return _SYSTEM_PROMPT_TEMPLATE.format(
+        if self.fb_terms == 1:
+            return _SYSTEM_PROMPT_TEMPLATE_SINGLE
+        return _SYSTEM_PROMPT_TEMPLATE_MULTI.format(
             fb_terms=self.fb_terms,
         )
 
     def _build_user_prompt(
-        self, original_query: str, passages: list[str]
+        self,
+        original_query: str,
+        passages: list[str],
+        rejected_terms: set[str] | None = None,
     ) -> str:
         """Build the user-facing prompt with full context passages (untruncated)."""
         numbered = "\n".join(
             f"[{i + 1}] {p.strip()}" for i, p in enumerate(passages)
         )
-        return (
-            f"Original query: {original_query}\n\n"
-            f"Retrieved passages:\n{numbered}\n\n"
-            f"Additional {self.fb_terms} expansion keywords:"
-        )
+        if self.fb_terms == 1:
+            base = (
+                f"Original query: {original_query}\n\n"
+                f"Retrieved passages:\n{numbered}\n\n"
+                f"Additional 1 expansion keyword (EXACTLY ONE SINGLE WORD, no phrases):"
+            )
+        else:
+            base = (
+                f"Original query: {original_query}\n\n"
+                f"Retrieved passages:\n{numbered}\n\n"
+                f"Additional {self.fb_terms} expansion keywords (EXACTLY {self.fb_terms} space-separated single words):"
+            )
+        if rejected_terms:
+            rejected_str = ", ".join(sorted(rejected_terms))
+            target_str = "1 DIFFERENT single-word keyword" if self.fb_terms == 1 else f"{self.fb_terms} DIFFERENT technical keywords"
+            base += (
+                f"\n\nIMPORTANT: The following terms were already tested and REJECTED "
+                f"(they were stopwords, duplicates of the original query, or not found in the index lexicon):\n"
+                f"{rejected_str}\n"
+                f"You MUST generate {target_str} from the passages."
+            )
+        return base
 
     # ── LLM interaction ───────────────────────────────────────────────────
 
-    def _call_llm(self, original_query: str, passages: list[str]) -> str:
+    def _call_llm(
+        self,
+        original_query: str,
+        passages: list[str],
+        rejected_terms: set[str] | None = None,
+        temperature: float | None = None,
+    ) -> str:
         """Call the LLM to reformulate the query, with retry on timeout."""
         system_prompt = self._build_system_prompt()
-        user_prompt = self._build_user_prompt(original_query, passages)
+        user_prompt = self._build_user_prompt(original_query, passages, rejected_terms=rejected_terms)
+        used_temp = temperature if temperature is not None else self.temperature
+        tokens_limit = min(self.max_tokens, 16) if self.fb_terms == 1 else self.max_tokens
 
         if self.verbose:
             print("  ┌─ Prompt enviado al LLM ────────────────────────────")
@@ -218,8 +286,8 @@ class RAGExpander:
                         {"role": "system", "content": system_prompt},
                         {"role": "user", "content": user_prompt},
                     ],
-                    max_tokens=self.max_tokens,
-                    temperature=self.temperature,
+                    max_tokens=tokens_limit,
+                    temperature=used_temp,
                 )
                 text = response.choices[0].message.content or ""
                 return text.strip()
@@ -321,6 +389,12 @@ class RAGExpander:
                 "time_second_pass": 0.0,
                 "n_terms_proposed": 0,
                 "n_terms_kept": 0,
+                "n_rejected_stopword": 0,
+                "n_rejected_duplicate": 0,
+                "n_rejected_lexicon": 0,
+                "n_rejected_truncated": 0,
+                "llm_attempts": 0,
+                "is_expanded": False,
             }
             return safe_query, first_results, timings
 
@@ -340,37 +414,104 @@ class RAGExpander:
                 "time_second_pass": 0.0,
                 "n_terms_proposed": 0,
                 "n_terms_kept": 0,
+                "n_rejected_stopword": 0,
+                "n_rejected_duplicate": 0,
+                "n_rejected_lexicon": 0,
+                "n_rejected_truncated": 0,
+                "llm_attempts": 0,
+                "is_expanded": False,
             }
             return safe_query, first_results, timings
 
         # 3. Ask the LLM to reformulate the query
-        t0 = time.time()
-        raw_llm_output = self._call_llm(query, passages)
-        elapsed_llm = time.time() - t0
-        if self.verbose:
-            print(f"  ⏱  Llamada al LLM      : {elapsed_llm:.3f}s")
-            print(f"  📝 Salida cruda LLM     : \"{raw_llm_output}\"")
+        # Re-try up to 2 times more (3 attempts total) if validations result
+        # in the query staying identical to the original query.
+        max_expansion_attempts = 3
+        all_rejected_tokens: set[str] = set()
+        total_time_llm = 0.0
+        cum_proposed = 0
+        cum_kept = 0
+        cum_rejections = {"stopword": 0, "duplicate": 0, "lexicon": 0, "truncated": 0}
 
-        logger.info(
-            "[LLM] raw output (%.3fs): '%s'",
-            elapsed_llm, raw_llm_output,
-        )
+        expanded = safe_query
+        success = False
+        attempt_used = 1
 
-        # Post-process LLM output
-        expanded, n_proposed, n_kept = postprocess_expanded_query(
-            original_query=query,
-            raw_expanded_text=raw_llm_output,
-            index=self._indexer._index,
-            fb_terms=self.fb_terms,
-        )
+        for attempt in range(1, max_expansion_attempts + 1):
+            attempt_used = attempt
+            t0 = time.time()
+            # On retries, use slightly higher temperature to encourage different words
+            curr_temp = max(self.temperature, 0.4) if attempt > 1 else self.temperature
+            raw_llm_output = self._call_llm(
+                query,
+                passages,
+                rejected_terms=all_rejected_tokens if attempt > 1 else None,
+                temperature=curr_temp,
+            )
+            elapsed_llm = time.time() - t0
+            total_time_llm += elapsed_llm
 
-        if self.verbose:
-            print(f"  📝 Query post-procesada : \"{expanded}\"")
+            if self.verbose:
+                print(f"  ⏱  Llamada al LLM (intento {attempt}/{max_expansion_attempts}): {elapsed_llm:.3f}s")
+                print(f"  📝 Salida cruda LLM     : \"{raw_llm_output}\"")
 
-        logger.info(
-            "[Optimized] original='%s' → expanded='%s'",
-            query, expanded,
-        )
+            logger.info(
+                "[LLM attempt %d/%d] raw output (%.3fs): '%s'",
+                attempt, max_expansion_attempts, elapsed_llm, raw_llm_output,
+            )
+
+            # Post-process LLM output
+            (
+                curr_expanded,
+                curr_proposed,
+                curr_kept,
+                curr_rejections,
+                curr_rejected_tokens,
+            ) = postprocess_expanded_query(
+                original_query=query,
+                raw_expanded_text=raw_llm_output,
+                index=self._indexer._index,
+                fb_terms=self.fb_terms,
+                previously_rejected=all_rejected_tokens,
+            )
+
+            all_rejected_tokens.update(curr_rejected_tokens)
+            cum_proposed += curr_proposed
+            cum_rejections["stopword"] += curr_rejections["stopword"]
+            cum_rejections["duplicate"] += curr_rejections["duplicate"]
+            cum_rejections["lexicon"] += curr_rejections["lexicon"]
+            cum_rejections["truncated"] += curr_rejections["truncated"]
+
+            if curr_kept > 0:
+                expanded = curr_expanded
+                cum_kept = curr_kept
+                success = True
+                if self.verbose:
+                    print(f"  📝 Query post-procesada : \"{expanded}\"")
+                logger.info(
+                    "[Optimized attempt %d] original='%s' → expanded='%s' (%d terms added)",
+                    attempt, query, expanded, curr_kept,
+                )
+                break
+            else:
+                if self.verbose and attempt < max_expansion_attempts:
+                    print(
+                        f"  ⚠️ Intento {attempt} no produjo términos válidos tras filtros. "
+                        f"Reintentando ({attempt + 1}/{max_expansion_attempts})..."
+                    )
+                logger.warning(
+                    "[LLM attempt %d/%d] Query quedó igual a la original ('%s'). Reintentando con otros términos...",
+                    attempt, max_expansion_attempts, query,
+                )
+
+        if not success:
+            expanded = safe_query
+            if self.verbose:
+                print(f"  ⚠️ Tras {max_expansion_attempts} intentos, la query permanece como la original: \"{expanded}\"")
+            logger.warning(
+                "[LLM fallback] Query '%s' no pudo ser expandida tras %d intentos.",
+                query, max_expansion_attempts,
+            )
 
         # 4. Second-pass retrieval
         t0 = time.time()
@@ -394,10 +535,16 @@ class RAGExpander:
         timings = {
             "time_first_pass": round(elapsed_first, 4),
             "time_text_fetch": round(elapsed_text, 4),
-            "time_llm": round(elapsed_llm, 4),
+            "time_llm": round(total_time_llm, 4),
             "time_second_pass": round(elapsed_second, 4),
-            "n_terms_proposed": n_proposed,
-            "n_terms_kept": n_kept,
+            "n_terms_proposed": cum_proposed,
+            "n_terms_kept": cum_kept,
+            "n_rejected_stopword": cum_rejections["stopword"],
+            "n_rejected_duplicate": cum_rejections["duplicate"],
+            "n_rejected_lexicon": cum_rejections["lexicon"],
+            "n_rejected_truncated": cum_rejections["truncated"],
+            "llm_attempts": attempt_used,
+            "is_expanded": success,
         }
 
         return expanded, results, timings

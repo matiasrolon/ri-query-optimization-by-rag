@@ -42,7 +42,11 @@ PALETTE = {
     "second_pass": "#059669",   # Emerald
     "proposed_terms": "#7C3AED",# Purple
     "kept_terms": "#15803D",    # Deep green
-    "discarded_terms": "#B91C1C"# Deep red
+    "discarded_terms": "#B91C1C",# Deep red
+    "rejected_stopword": "#94A3B8",   # Slate gray
+    "rejected_duplicate": "#D97706",  # Amber
+    "rejected_lexicon": "#B91C1C",    # Deep red
+    "rejected_truncated": "#0284C7",  # Deep sky blue / teal
 }
 
 
@@ -357,12 +361,46 @@ def plot_lexicon_filtering_donut(
     fig, ax = plt.subplots(figsize=(3.4, 2.3))
 
     if lex.has_term_data and lex.total_proposed > 0:
-        fate_labels = [
-            f"Aceptados\n{lex.survival_rate_pct:.1f}%",
-            f"Alucinados\n{lex.hallucination_rate_pct:.1f}%"
-        ]
-        fate_counts = [lex.total_kept, lex.total_discarded]
-        fate_colors = [PALETTE["kept_terms"], PALETTE["discarded_terms"]]
+        if lex.has_breakdown and (
+            lex.total_rejected_stopword > 0
+            or lex.total_rejected_duplicate > 0
+            or lex.total_rejected_lexicon > 0
+            or lex.total_rejected_truncated > 0
+        ):
+            fate_labels = []
+            fate_counts = []
+            fate_colors = []
+
+            fate_labels.append(f"Aceptados\n{lex.survival_rate_pct:.1f}%")
+            fate_counts.append(lex.total_kept)
+            fate_colors.append(PALETTE["kept_terms"])
+
+            if lex.total_rejected_lexicon > 0:
+                fate_labels.append(f"Alucinados\n{lex.rejected_lexicon_pct:.1f}%")
+                fate_counts.append(lex.total_rejected_lexicon)
+                fate_colors.append(PALETTE["rejected_lexicon"])
+
+            if lex.total_rejected_truncated > 0:
+                fate_labels.append(f"Truncados\n{lex.rejected_truncated_pct:.1f}%")
+                fate_counts.append(lex.total_rejected_truncated)
+                fate_colors.append(PALETTE["rejected_truncated"])
+
+            if lex.total_rejected_duplicate > 0:
+                fate_labels.append(f"Duplicados\n{lex.rejected_duplicate_pct:.1f}%")
+                fate_counts.append(lex.total_rejected_duplicate)
+                fate_colors.append(PALETTE["rejected_duplicate"])
+
+            if lex.total_rejected_stopword > 0:
+                fate_labels.append(f"Stopwords\n{lex.rejected_stopword_pct:.1f}%")
+                fate_counts.append(lex.total_rejected_stopword)
+                fate_colors.append(PALETTE["rejected_stopword"])
+        else:
+            fate_labels = [
+                f"Aceptados\n{lex.survival_rate_pct:.1f}%",
+                f"Alucinados\n{lex.hallucination_rate_pct:.1f}%"
+            ]
+            fate_counts = [lex.total_kept, lex.total_discarded]
+            fate_colors = [PALETTE["kept_terms"], PALETTE["discarded_terms"]]
 
         wedges, texts = ax.pie(
             fate_counts,
@@ -521,14 +559,22 @@ def generate_all_plots(
         f.write(f"      - 1ª Pasada                     : {metrics.timings_prf.first_pass_mean:.4f} s ({metrics.timings_prf.first_pass_pct:.1f}%)\n")
         f.write(f"      - 2ª Pasada                     : {metrics.timings_prf.second_pass_mean:.4f} s ({metrics.timings_prf.second_pass_pct:.1f}%)\n\n")
 
-        f.write("── 4. FILTRADO DE LEXICÓN Y ALUCINACIÓN DEL LLM ───────────────────────\n")
+        f.write("── 4. FILTRADO DE LEXICÓN Y RECHAZOS DEL LLM ─────────────────────────\n")
         lex = metrics.lexicon
         f.write(f"  • Longitud Promedio Query Original   : {lex.q_terms_original_mean:.2f} términos\n")
         f.write(f"  • Términos Propuestos por LLM (media): {lex.n_terms_proposed_mean:.2f} (Total: {lex.total_proposed:,})\n")
-        f.write(f"  • Términos Aceptados en Lexicón      : {lex.n_terms_kept_mean:.2f} (Total: {lex.total_kept:,})\n")
-        f.write(f"  • Términos Descartados (Alucinación) : {lex.n_terms_discarded_mean:.2f} (Total: {lex.total_discarded:,})\n")
-        f.write(f"  • Tasa de Supervivencia en Lexicón   : {lex.survival_rate_pct:.2f}%\n")
-        f.write(f"  • Tasa de Alucinación / Descarte     : {lex.hallucination_rate_pct:.2f}%\n")
+        f.write(f"  • Términos Aceptados en Consulta     : {lex.n_terms_kept_mean:.2f} (Total: {lex.total_kept:,})\n")
+        if lex.has_breakdown:
+            f.write(f"  • Desglose de Términos Rechazados / No Utilizados:\n")
+            f.write(f"      - Por stopwords                     : {lex.total_rejected_stopword:,} ({lex.rejected_stopword_pct:.2f}%)\n")
+            f.write(f"      - Por duplicación                   : {lex.total_rejected_duplicate:,} ({lex.rejected_duplicate_pct:.2f}%)\n")
+            f.write(f"      - Por no estar en léxico (alucinac) : {lex.total_rejected_lexicon:,} ({lex.rejected_lexicon_pct:.2f}%)\n")
+            if lex.total_rejected_truncated > 0:
+                f.write(f"      - No evaluados (por truncamiento)   : {lex.total_rejected_truncated:,} ({lex.rejected_truncated_pct:.2f}%)\n")
+        else:
+            f.write(f"  • Términos Descartados (Alucinación)    : {lex.n_terms_discarded_mean:.2f} (Total: {lex.total_discarded:,})\n")
+        f.write(f"  • Tasa de Supervivencia en Consulta  : {lex.survival_rate_pct:.2f}%\n")
+        f.write(f"  • Tasa de Rechazo / Alucinación      : {lex.hallucination_rate_pct:.2f}%\n")
         f.write(f"  • Longitud Promedio Query Expandida  : {lex.q_terms_expanded_mean:.2f} términos\n")
         f.write("=" * 70 + "\n")
     fig_paths["summary_txt"] = txt_path

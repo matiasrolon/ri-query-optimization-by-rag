@@ -80,10 +80,18 @@ def main() -> int:
     print(f"    - Text Fetch (RAG)                 : {metrics.timings_rag.text_fetch_mean*1000:.2f} ms ({metrics.timings_rag.text_fetch_pct:.2f}% marginal)")
     print()
     if metrics.lexicon.has_term_data:
-        print("  Filtrado de Lexicón / Alucinación del LLM:")
+        print("  Filtrado de Términos / Rechazos del LLM:")
         print(f"    - Términos propuestos por LLM      : {metrics.lexicon.total_proposed:,} (media: {metrics.lexicon.n_terms_proposed_mean:.2f})")
-        print(f"    - Aceptados en lexicón             : {metrics.lexicon.total_kept:,} ({metrics.lexicon.survival_rate_pct:.2f}%)")
-        print(f"    - Descartados (Alucinación)        : {metrics.lexicon.total_discarded:,} ({metrics.lexicon.hallucination_rate_pct:.2f}%)")
+        print(f"    - Aceptados en consulta            : {metrics.lexicon.total_kept:,} ({metrics.lexicon.survival_rate_pct:.2f}%)")
+        if metrics.lexicon.has_breakdown:
+            print("    - Desglose de Rechazos:")
+            print(f"        • Por stopwords                : {metrics.lexicon.total_rejected_stopword:,} ({metrics.lexicon.rejected_stopword_pct:.2f}%)")
+            print(f"        • Por duplicación              : {metrics.lexicon.total_rejected_duplicate:,} ({metrics.lexicon.rejected_duplicate_pct:.2f}%)")
+            print(f"        • Por no estar en léxico (aluc): {metrics.lexicon.total_rejected_lexicon:,} ({metrics.lexicon.rejected_lexicon_pct:.2f}%)")
+            if metrics.lexicon.total_rejected_truncated > 0:
+                print(f"        • No evaluados (truncamiento)  : {metrics.lexicon.total_rejected_truncated:,} ({metrics.lexicon.rejected_truncated_pct:.2f}%)")
+        else:
+            print(f"    - Descartados (Alucinación)        : {metrics.lexicon.total_discarded:,} ({metrics.lexicon.hallucination_rate_pct:.2f}%)")
     print("─" * 70)
 
     print("\n📁 Gráficos y reportes generados:")

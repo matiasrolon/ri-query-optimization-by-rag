@@ -71,6 +71,16 @@ class LexiconFilterMetrics:
     total_discarded: int
     survival_rate_pct: float
     hallucination_rate_pct: float
+    # Breakdown by rejection reason
+    has_breakdown: bool = False
+    total_rejected_stopword: int = 0
+    total_rejected_duplicate: int = 0
+    total_rejected_lexicon: int = 0
+    total_rejected_truncated: int = 0
+    rejected_stopword_pct: float = 0.0
+    rejected_duplicate_pct: float = 0.0
+    rejected_lexicon_pct: float = 0.0
+    rejected_truncated_pct: float = 0.0
 
 
 @dataclass
@@ -146,6 +156,10 @@ class BenchmarkAnalyzer:
         else:
             raise ValueError("El archivo CSV no contiene la columna requerida 'method'.")
 
+        # Ensure mrr is numeric (empty strings or NaNs become np.nan)
+        if "mrr" in df.columns:
+            df["mrr"] = pd.to_numeric(df["mrr"], errors="coerce")
+
         self._df = df
 
         # Filter RAG and PRF
@@ -160,6 +174,11 @@ class BenchmarkAnalyzer:
         # Ensure queryid is string
         self._rag_df["queryid"] = self._rag_df["queryid"].astype(str)
         self._prf_df["queryid"] = self._prf_df["queryid"].astype(str)
+
+        # In RAG, queries where n_terms_kept == 0 stayed as the original query
+        # and should be excluded from MRR@10 and gain/loss evaluation
+        if "n_terms_kept" in self._rag_df.columns:
+            self._rag_df.loc[self._rag_df["n_terms_kept"] == 0, "mrr"] = np.nan
 
         # Merge on queryid to compare query by query
         merged = pd.merge(
@@ -179,10 +198,12 @@ class BenchmarkAnalyzer:
             self.load_and_preprocess()
 
         merged = self._merged_df
-        delta = merged["delta_rr"]
+        # Drop rows where delta_rr is NaN (queries excluded from MRR)
+        valid_merged = merged.dropna(subset=["delta_rr"])
+        delta = valid_merged["delta_rr"]
         total = len(delta)
         if total == 0:
-            raise ValueError("No hay consultas coincidentes entre RAG y PRF.")
+            raise ValueError("No hay consultas coincidentes entre RAG y PRF con delta_rr válido.")
 
         eps = 1e-7
         improved = delta > eps
@@ -286,6 +307,20 @@ class BenchmarkAnalyzer:
         survival_rate = (kept_sum / prop_sum * 100.0) if prop_sum > 0 else 0.0
         hallucination_rate = (disc_sum / prop_sum * 100.0) if prop_sum > 0 else 0.0
 
+        has_breakdown = any(
+            c in rag.columns
+            for c in ["n_rejected_stopword", "n_rejected_duplicate", "n_rejected_lexicon", "n_rejected_truncated"]
+        )
+        tot_stop = int(rag["n_rejected_stopword"].sum()) if "n_rejected_stopword" in rag.columns else 0
+        tot_dup = int(rag["n_rejected_duplicate"].sum()) if "n_rejected_duplicate" in rag.columns else 0
+        tot_lex = int(rag["n_rejected_lexicon"].sum()) if "n_rejected_lexicon" in rag.columns else 0
+        tot_trunc = int(rag["n_rejected_truncated"].sum()) if "n_rejected_truncated" in rag.columns else 0
+
+        stop_pct = (tot_stop / prop_sum * 100.0) if prop_sum > 0 else 0.0
+        dup_pct = (tot_dup / prop_sum * 100.0) if prop_sum > 0 else 0.0
+        lex_pct = (tot_lex / prop_sum * 100.0) if prop_sum > 0 else 0.0
+        trunc_pct = (tot_trunc / prop_sum * 100.0) if prop_sum > 0 else 0.0
+
         return LexiconFilterMetrics(
             has_term_data=True,
             q_terms_original_mean=round(orig_mean, 2),
@@ -298,6 +333,15 @@ class BenchmarkAnalyzer:
             total_discarded=disc_sum,
             survival_rate_pct=round(survival_rate, 2),
             hallucination_rate_pct=round(hallucination_rate, 2),
+            has_breakdown=has_breakdown,
+            total_rejected_stopword=tot_stop,
+            total_rejected_duplicate=tot_dup,
+            total_rejected_lexicon=tot_lex,
+            total_rejected_truncated=tot_trunc,
+            rejected_stopword_pct=round(stop_pct, 2),
+            rejected_duplicate_pct=round(dup_pct, 2),
+            rejected_lexicon_pct=round(lex_pct, 2),
+            rejected_truncated_pct=round(trunc_pct, 2),
         )
 
     def analyze(self) -> AnalysisMetrics:
@@ -309,10 +353,12 @@ class BenchmarkAnalyzer:
         timings_prf = self._compute_timing_breakdown(self._prf_df, "PRF")
         lexicon = self.compute_lexicon_filter_metrics()
 
-        mrr_rag = float(self._rag_df["mrr"].mean())
-        mrr_prf = float(self._prf_df["mrr"].mean())
+        mrr_rag = float(self._rag_df["mrr"].dropna().mean())
+        mrr_prf = float(self._prf_df["mrr"].dropna().mean())
         mrr_diff = mrr_rag - mrr_prf
         mrr_gain_pct = ((mrr_diff) / mrr_prf * 100.0) if mrr_prf > 0 else 0.0
+
+        valid_common = len(self._merged_df.dropna(subset=["delta_rr"])) if self._merged_df is not None else 0
 
         return AnalysisMetrics(
             source_file=self.file_path,
@@ -320,7 +366,7 @@ class BenchmarkAnalyzer:
             total_rows=len(self._df),
             rag_query_count=len(self._rag_df),
             prf_query_count=len(self._prf_df),
-            common_query_count=len(self._merged_df),
+            common_query_count=valid_common,
             mean_inference_time_seconds=timings_rag.llm_inference_mean,
             mrr_rag_mean=round(mrr_rag, 4),
             mrr_prf_mean=round(mrr_prf, 4),

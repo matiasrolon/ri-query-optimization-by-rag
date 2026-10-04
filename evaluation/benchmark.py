@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import csv
 import logging
+import math
 import os
 import time
 from datetime import datetime
@@ -150,10 +151,16 @@ def count_terms(query: str) -> int:
 _CSV_FIELDNAMES = [
     "queryid",
     "method",
+    "query_original",
+    "query_expanded",
     "q_terms_original",
     "q_terms_expanded",
     "n_terms_proposed",
     "n_terms_kept",
+    "n_rejected_stopword",
+    "n_rejected_duplicate",
+    "n_rejected_lexicon",
+    "n_rejected_truncated",
     "time_seconds",
     "time_first_pass",
     "time_text_fetch",
@@ -237,10 +244,16 @@ def run_bm25_benchmark(
         res_dict = {
             "queryid": qid,
             "method": "bm25",
+            "query_original": original_query,
+            "query_expanded": safe_query,
             "q_terms_original": count_terms(original_query),
             "q_terms_expanded": count_terms(safe_query),
             "n_terms_proposed": 0,
             "n_terms_kept": 0,
+            "n_rejected_stopword": 0,
+            "n_rejected_duplicate": 0,
+            "n_rejected_lexicon": 0,
+            "n_rejected_truncated": 0,
             "time_seconds": round(elapsed_first, 4),
             "time_first_pass": round(elapsed_first, 4),
             "time_text_fetch": 0.0,
@@ -300,10 +313,16 @@ def run_prf_benchmark(
         res_dict = {
             "queryid": qid,
             "method": "prf",
+            "query_original": original_query,
+            "query_expanded": expanded_query,
             "q_terms_original": count_terms(original_query),
             "q_terms_expanded": count_terms(expanded_query),
             "n_terms_proposed": n_proposed,
             "n_terms_kept": n_kept,
+            "n_rejected_stopword": 0,
+            "n_rejected_duplicate": 0,
+            "n_rejected_lexicon": 0,
+            "n_rejected_truncated": 0,
             "time_seconds": round(elapsed, 4),
             "time_first_pass": timings.get("time_first_pass", 0.0),
             "time_text_fetch": timings.get("time_text_fetch", 0.0),
@@ -361,42 +380,67 @@ def run_rag_benchmark(
         expanded_query, search_results, timings = expander.expand_and_search(original_query)
         elapsed = time.time() - t0
 
-        mrr = compute_mrr(search_results, relevant, k=10)
-
+        is_expanded = timings.get("is_expanded", False)
         n_proposed = timings.get("n_terms_proposed", 0)
         n_kept = timings.get("n_terms_kept", 0)
+        n_rejected_stopword = timings.get("n_rejected_stopword", 0)
+        n_rejected_duplicate = timings.get("n_rejected_duplicate", 0)
+        n_rejected_lexicon = timings.get("n_rejected_lexicon", 0)
+        n_rejected_truncated = timings.get("n_rejected_truncated", 0)
+        attempts = timings.get("llm_attempts", 1)
+
+        if is_expanded and n_kept > 0:
+            mrr = compute_mrr(search_results, relevant, k=10)
+            mrr_val = round(mrr, 6)
+            mrr_str = f"{mrr:.4f}"
+        else:
+            # Query stayed identical to original after all retries.
+            # Exclude from MRR calculation so the average is not diluted.
+            mrr_val = ""
+            mrr_str = "EXCLUIDA (query igual a original)"
 
         res_dict = {
             "queryid": qid,
             "method": "rag",
+            "query_original": original_query,
+            "query_expanded": expanded_query,
             "q_terms_original": count_terms(original_query),
             "q_terms_expanded": count_terms(expanded_query),
             "n_terms_proposed": n_proposed,
             "n_terms_kept": n_kept,
+            "n_rejected_stopword": n_rejected_stopword,
+            "n_rejected_duplicate": n_rejected_duplicate,
+            "n_rejected_lexicon": n_rejected_lexicon,
+            "n_rejected_truncated": n_rejected_truncated,
             "time_seconds": round(elapsed, 4),
             "time_first_pass": timings.get("time_first_pass", 0.0),
             "time_text_fetch": timings.get("time_text_fetch", 0.0),
             "time_llm": timings.get("time_llm", 0.0),
             "time_second_pass": timings.get("time_second_pass", 0.0),
-            "mrr": round(mrr, 6),
+            "mrr": mrr_val,
         }
         results_list.append(res_dict)
         if writer is not None:
             writer.add_result(res_dict)
 
         logger.info(
-            "[RAG] qid=%s | original='%s' | expanded='%s' | "
-            "MRR@10=%.4f | time=%.3fs | terms: %d→%d (proposed: %d, kept: %d)",
-            qid, original_query, expanded_query,
-            mrr, elapsed,
+            "[RAG] qid=%s | original='%s' | expanded='%s' | attempts=%d | "
+            "MRR@10=%s | time=%.3fs | terms: %d→%d (prop: %d, kept: %d, stop: %d, dup: %d, lex: %d, trunc: %d)",
+            qid, original_query, expanded_query, attempts,
+            mrr_str, elapsed,
             count_terms(original_query), count_terms(expanded_query),
             n_proposed, n_kept,
+            n_rejected_stopword, n_rejected_duplicate, n_rejected_lexicon, n_rejected_truncated,
         )
 
-        print(f"         📝 Query Expandida: \"{expanded_query}\"")
-        print(f"         MRR@10={mrr:.4f}  time={elapsed:.3f}s  "
+        status_note = f" [intentos: {attempts}]" if attempts > 1 else ""
+        print(f"         📝 Query Final: \"{expanded_query}\"")
+        print(f"         MRR@10={mrr_str}  time={elapsed:.3f}s  "
               f"terms: {count_terms(original_query)}→{count_terms(expanded_query)} "
-              f"(propuestos: {n_proposed}, aceptados: {n_kept})")
+              f"(propuestos: {n_proposed}, aceptados: {n_kept}, "
+              f"rechazados: [stopword: {n_rejected_stopword}, dup: {n_rejected_duplicate}, "
+              f"léxico: {n_rejected_lexicon}, truncado: {n_rejected_truncated}])"
+              f"{status_note}")
 
     if writer is not None:
         writer.flush()
@@ -563,13 +607,24 @@ def run_benchmark(
     t0 = time.time()
     rag_results = run_rag_benchmark(queries_with_qrels, qrels, indexer, writer=csv_writer)
     rag_time = time.time() - t0
+    valid_rag_mrrs = [
+        r["mrr"] for r in rag_results
+        if r.get("mrr") is not None and r["mrr"] != "" and not (isinstance(r["mrr"], float) and math.isnan(r["mrr"]))
+    ]
     rag_mrr_avg = (
-        sum(r["mrr"] for r in rag_results) / len(rag_results)
-        if rag_results
+        sum(valid_rag_mrrs) / len(valid_rag_mrrs)
+        if valid_rag_mrrs
         else 0.0
     )
-    print(f"\n   RAG completado: {len(rag_results)} queries en {rag_time:.1f}s")
-    print(f"   MRR@10 promedio RAG: {rag_mrr_avg:.4f}")
+    n_total_rag = len(rag_results)
+    n_expanded_rag = len(valid_rag_mrrs)
+    n_unchanged_rag = n_total_rag - n_expanded_rag
+
+    print(f"\n   RAG completado: {n_total_rag} queries en {rag_time:.1f}s")
+    print(f"   Queries expandidas con éxito : {n_expanded_rag}/{n_total_rag}")
+    if n_unchanged_rag > 0:
+        print(f"   Queries sin cambios (excluidas del MRR): {n_unchanged_rag}")
+    print(f"   MRR@10 promedio RAG (sobre {n_expanded_rag} queries expandidas): {rag_mrr_avg:.4f}")
     print()
 
     # Ensure all remaining buffered results are flushed to disk
@@ -581,7 +636,7 @@ def run_benchmark(
     print(f"   Queries evaluadas   : {len(queries_with_qrels)}")
     print(f"   MRR@10 promedio BM25: {bm25_mrr_avg:.4f}")
     print(f"   MRR@10 promedio PRF : {prf_mrr_avg:.4f}")
-    print(f"   MRR@10 promedio RAG : {rag_mrr_avg:.4f}")
+    print(f"   MRR@10 promedio RAG : {rag_mrr_avg:.4f} (sobre {n_expanded_rag} queries expandidas; {n_unchanged_rag} sin cambios excluidas)")
     print(f"   Tiempo total BM25   : {bm25_time:.1f}s")
     print(f"   Tiempo total PRF    : {prf_time:.1f}s")
     print(f"   Tiempo total RAG    : {rag_time:.1f}s")

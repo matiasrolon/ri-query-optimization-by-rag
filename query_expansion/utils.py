@@ -88,7 +88,8 @@ def postprocess_expanded_query(
     index,
     fb_terms: int,
     feedback_doc_terms: set[str] | None = None,
-) -> tuple[str, int, int]:
+    previously_rejected: set[str] | None = None,
+) -> tuple[str, int, int, dict[str, int], set[str]]:
     """
     Unified post-processing pipeline for expanded queries.
 
@@ -98,14 +99,15 @@ def postprocess_expanded_query(
     Steps
     -----
     1. Tokenise and sanitise both original and expanded text.
-    2. Remove stopwords (Terrier's list).
-    3. Stem every token (PorterStemmer).
-    4. Deduplicate against the original query (stemmed).
-    5. Keep only terms present in the index lexicon.
+    2. Remove stopwords (Terrier's list), tracking rejections.
+    3. Stem tokens (PorterStemmer).
+    4. Deduplicate against the original query, previously seen candidate terms,
+       and previously rejected terms, tracking rejections.
+    5. Keep only terms present in the index lexicon, tracking rejections.
     6. If *feedback_doc_terms* is provided, keep only terms that
        appear in the feedback documents.
     7. Truncate to *fb_terms* additional terms.
-    8. Return ``(expanded_query_str, n_terms_proposed, n_terms_kept)``.
+    8. Return ``(expanded_query_str, n_terms_proposed, n_terms_kept, rejection_counts, rejected_tokens)``.
 
     Parameters
     ----------
@@ -120,48 +122,98 @@ def postprocess_expanded_query(
     feedback_doc_terms : set[str] | None
         Optional set of stemmed terms from the feedback documents.
         When provided, expansion terms not in this set are discarded.
+    previously_rejected : set[str] | None
+        Set of tokens or stems previously rejected across earlier LLM attempts.
 
     Returns
     -------
-    tuple[str, int, int]
-        A tuple of (expanded_query_string, n_terms_proposed, n_terms_kept).
+    tuple[str, int, int, dict[str, int], set[str]]
+        (expanded_query, n_terms_proposed, n_terms_kept, rejection_counts, rejected_tokens).
     """
     # Stem original query tokens
+    original_tokens = sanitize_query(original_query)
     original_stemmed: set[str] = set()
-    for tok in sanitize_query(original_query):
+    for tok in original_tokens:
         if not is_stopword(tok):
             original_stemmed.add(stem_term(tok))
 
     # Process candidate expansion terms
     new_terms: list[str] = []
-    seen: set[str] = set()
-    proposed_stemmed: set[str] = set()
+    seen_in_proposal: set[str] = set()
+    rejected_tokens: set[str] = set()
 
-    for tok in sanitize_query(raw_expanded_text):
+    n_rejected_stopword = 0
+    n_rejected_duplicate = 0
+    n_rejected_lexicon = 0
+    n_rejected_truncated = 0
+
+    candidate_tokens = sanitize_query(raw_expanded_text)
+
+    for i, tok in enumerate(candidate_tokens):
+        # If we have already collected fb_terms accepted terms,
+        # any remaining tokens in the candidate list are discarded due to truncation
+        # (they were not evaluated, NOT hallucinated).
+        if len(new_terms) >= fb_terms:
+            n_rejected_truncated += len(candidate_tokens) - i
+            break
+
+        # Reason 1: Stopword
         if is_stopword(tok):
+            n_rejected_stopword += 1
+            rejected_tokens.add(tok)
             continue
-        stemmed = stem_term(tok)
-        if stemmed in original_stemmed or stemmed in proposed_stemmed:
-            continue
-        proposed_stemmed.add(stemmed)
 
+        stemmed = stem_term(tok)
+
+        # Reason 2: Duplicate (in original query, in this response, or previously rejected)
+        if (
+            stemmed in original_stemmed
+            or stemmed in seen_in_proposal
+            or (previously_rejected is not None and (stemmed in previously_rejected or tok in previously_rejected))
+        ):
+            n_rejected_duplicate += 1
+            rejected_tokens.add(tok)
+            continue
+
+        seen_in_proposal.add(stemmed)
+
+        # Reason 3: Not in lexicon (true hallucination)
         if not term_in_lexicon(index, stemmed):
+            n_rejected_lexicon += 1
+            rejected_tokens.add(tok)
             continue
+
         if feedback_doc_terms is not None and stemmed not in feedback_doc_terms:
+            n_rejected_lexicon += 1
+            rejected_tokens.add(tok)
             continue
-        if len(new_terms) < fb_terms:
-            seen.add(stemmed)
-            new_terms.append(stemmed)
+
+        # Accepted term
+        new_terms.append(stemmed)
 
     safe_original = sanitize_query_str(original_query)
-    n_terms_proposed = len(proposed_stemmed)
     n_terms_kept = len(new_terms)
+    n_terms_proposed = (
+        n_terms_kept
+        + n_rejected_stopword
+        + n_rejected_duplicate
+        + n_rejected_lexicon
+        + n_rejected_truncated
+    )
+
+    rejection_counts = {
+        "stopword": n_rejected_stopword,
+        "duplicate": n_rejected_duplicate,
+        "lexicon": n_rejected_lexicon,
+        "truncated": n_rejected_truncated,
+    }
 
     if new_terms:
         expanded_query = safe_original + " " + " ".join(new_terms)
     else:
         expanded_query = safe_original
 
-    return expanded_query, n_terms_proposed, n_terms_kept
+    return expanded_query, n_terms_proposed, n_terms_kept, rejection_counts, rejected_tokens
+
 
 
