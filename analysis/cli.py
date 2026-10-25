@@ -92,6 +92,16 @@ def main() -> int:
                 print(f"        • No evaluados (truncamiento)  : {metrics.lexicon.total_rejected_truncated:,} ({metrics.lexicon.rejected_truncated_pct:.2f}%)")
         else:
             print(f"    - Descartados (Alucinación)        : {metrics.lexicon.total_discarded:,} ({metrics.lexicon.hallucination_rate_pct:.2f}%)")
+
+    if metrics.attempts is not None and metrics.attempts.total_queries > 0:
+        att = metrics.attempts
+        print()
+        print("  Reintentos del LLM (Intentos de expansión):")
+        print(f"    - 1 intento  (éxito inmediato)     : {att.attempts_1_count:,} ({att.attempts_1_pct:.2f}%)")
+        print(f"    - 2 intentos (1 reintento)         : {att.attempts_2_count:,} ({att.attempts_2_pct:.2f}%)")
+        print(f"    - 3 intentos (éxito en 3° intento) : {att.attempts_3_success_count:,} ({att.attempts_3_success_pct:.2f}%)")
+        print(f"    - 3 intentos (fallido / sin éxito) : {att.attempts_3_failed_count:,} ({att.attempts_3_failed_pct:.2f}%)")
+        print(f"    - Timeouts (límite superado)       : {att.timeouts_count:,} ({att.timeouts_pct:.2f}%)")
     print("─" * 70)
 
     print("\n📁 Gráficos y reportes generados:")

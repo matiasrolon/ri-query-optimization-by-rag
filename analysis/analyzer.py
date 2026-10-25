@@ -84,6 +84,28 @@ class LexiconFilterMetrics:
 
 
 @dataclass
+class AttemptsMetrics:
+    """Statistics on LLM expansion attempts and timeouts."""
+    total_queries: int
+    attempts_1_count: int
+    attempts_2_count: int
+    attempts_3_count: int
+    attempts_3_success_count: int = 0
+    attempts_3_failed_count: int = 0
+    attempts_0_count: int = 0
+    attempts_1_pct: float = 0.0
+    attempts_2_pct: float = 0.0
+    attempts_3_pct: float = 0.0
+    attempts_3_success_pct: float = 0.0
+    attempts_3_failed_pct: float = 0.0
+    timeouts_count: int = 0
+    timeouts_pct: float = 0.0
+    mean_time_attempt_1: float = 0.0
+    mean_time_attempt_2: float = 0.0
+    mean_time_attempt_3: float = 0.0
+
+
+@dataclass
 class AnalysisMetrics:
     """Aggregated analysis results from a benchmark CSV file."""
     source_file: str
@@ -105,6 +127,7 @@ class AnalysisMetrics:
     timings_rag: TimingBreakdown
     timings_prf: TimingBreakdown
     lexicon: LexiconFilterMetrics
+    attempts: AttemptsMetrics | None = None
 
     def to_dict(self) -> dict[str, Any]:
         """Convert metrics to a serializable dictionary."""
@@ -352,6 +375,7 @@ class BenchmarkAnalyzer:
         timings_rag = self._compute_timing_breakdown(self._rag_df, "RAG (LLM)")
         timings_prf = self._compute_timing_breakdown(self._prf_df, "PRF")
         lexicon = self.compute_lexicon_filter_metrics()
+        attempts = self.compute_attempts_metrics()
 
         mrr_rag = float(self._rag_df["mrr"].dropna().mean())
         mrr_prf = float(self._prf_df["mrr"].dropna().mean())
@@ -376,6 +400,84 @@ class BenchmarkAnalyzer:
             timings_rag=timings_rag,
             timings_prf=timings_prf,
             lexicon=lexicon,
+            attempts=attempts,
+        )
+
+    def compute_attempts_metrics(self) -> AttemptsMetrics:
+        """Compute distribution of LLM attempts and timeouts."""
+        rag = self._rag_df
+        if rag is None or rag.empty:
+            return AttemptsMetrics(0, 0, 0, 0, 0, 0.0, 0.0, 0.0, 0, 0.0, 0.0, 0.0, 0.0)
+
+        # Determine attempts per query
+        if "llm_attempts" in rag.columns and rag["llm_attempts"].notna().any() and (rag["llm_attempts"] > 0).any():
+            attempts_series = rag["llm_attempts"].fillna(1).astype(int)
+        else:
+            # Infer for benchmark datasets that did not record llm_attempts explicitly
+            def _infer(row: pd.Series) -> int:
+                if row.get("time_llm", 0.0) == 0.0:
+                    return 0
+                if row.get("n_terms_kept", 0) == 0:
+                    return 3
+                rej = (
+                    row.get("n_rejected_stopword", 0)
+                    + row.get("n_rejected_duplicate", 0)
+                    + row.get("n_rejected_lexicon", 0)
+                )
+                if rej == 0:
+                    return 1
+                elif rej == 1:
+                    return 2
+                else:
+                    return 3
+
+            attempts_series = rag.apply(_infer, axis=1)
+
+        total = len(rag)
+        c0 = int((attempts_series == 0).sum())
+        c1 = int((attempts_series == 1).sum())
+        c2 = int((attempts_series == 2).sum())
+
+        mask_3 = attempts_series >= 3
+        kept_col = rag["n_terms_kept"] if "n_terms_kept" in rag.columns else pd.Series(1, index=rag.index)
+        c3_succ = int((mask_3 & (kept_col > 0)).sum())
+        c3_fail = int((mask_3 & (kept_col == 0)).sum())
+        c3 = c3_succ + c3_fail
+
+        p1 = (c1 / total * 100.0) if total > 0 else 0.0
+        p2 = (c2 / total * 100.0) if total > 0 else 0.0
+        p3 = (c3 / total * 100.0) if total > 0 else 0.0
+        p3_succ = (c3_succ / total * 100.0) if total > 0 else 0.0
+        p3_fail = (c3_fail / total * 100.0) if total > 0 else 0.0
+
+        # Timeouts: requests exceeding 120s
+        timeout_threshold = 120.0
+        timeouts = int((rag["time_seconds"] >= timeout_threshold).sum()) if "time_seconds" in rag.columns else 0
+        timeout_pct = (timeouts / total * 100.0) if total > 0 else 0.0
+
+        time_col = "time_llm" if "time_llm" in rag.columns else "time_seconds"
+        t1 = float(rag[attempts_series == 1][time_col].mean()) if c1 > 0 else 0.0
+        t2 = float(rag[attempts_series == 2][time_col].mean()) if c2 > 0 else 0.0
+        t3 = float(rag[attempts_series >= 3][time_col].mean()) if c3 > 0 else 0.0
+
+        return AttemptsMetrics(
+            total_queries=total,
+            attempts_1_count=c1,
+            attempts_2_count=c2,
+            attempts_3_count=c3,
+            attempts_3_success_count=c3_succ,
+            attempts_3_failed_count=c3_fail,
+            attempts_0_count=c0,
+            attempts_1_pct=round(p1, 2),
+            attempts_2_pct=round(p2, 2),
+            attempts_3_pct=round(p3, 2),
+            attempts_3_success_pct=round(p3_succ, 2),
+            attempts_3_failed_pct=round(p3_fail, 2),
+            timeouts_count=timeouts,
+            timeouts_pct=round(timeout_pct, 2),
+            mean_time_attempt_1=round(t1, 4),
+            mean_time_attempt_2=round(t2, 4),
+            mean_time_attempt_3=round(t3, 4),
         )
 
     @property

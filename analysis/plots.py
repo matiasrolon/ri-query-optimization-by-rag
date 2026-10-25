@@ -201,10 +201,11 @@ def plot_gain_loss_donut(
         wedgeprops=dict(width=0.42, edgecolor="white", linewidth=1.2)
     )
 
-    # Center label with net balance
+    # Center label with net balance percentage
+    net_pct = (metrics.gain_loss.net_wins / metrics.gain_loss.total_queries) * 100.0 if metrics.gain_loss.total_queries > 0 else 0.0
     ax.text(
         0, 0,
-        f"Neto\n{metrics.gain_loss.net_wins:+d}",
+        f"Neto\n{net_pct:+.1f}%",
         ha="center", va="center",
         fontsize=8.5, fontweight="bold", color="#1E293B"
     )
@@ -499,6 +500,76 @@ def plot_terms_distribution(
     return _save_figure(fig, output_dir, "04_terms_distribution_per_query")
 
 
+# ── Chart 5: LLM Expansion Attempts Distribution ─────────────────────────────
+def plot_llm_attempts(
+    analyzer: BenchmarkAnalyzer,
+    metrics: AnalysisMetrics,
+    output_dir: str
+) -> str:
+    """
+    Generate Chart 5: Distribution of LLM expansion attempts (1, 2, 3 attempts).
+    Single column width ~3.4 inches.
+    """
+    _apply_plot_style()
+    att = metrics.attempts
+
+    fig, ax = plt.subplots(figsize=(3.4, 2.3))
+
+    if att is not None and att.total_queries > 0:
+        categories = ["1 intento", "2 intentos", "3 intentos\n(éxito)", "3 intentos\n(fallido)"]
+        counts = [
+            att.attempts_1_count,
+            att.attempts_2_count,
+            att.attempts_3_success_count,
+            att.attempts_3_failed_count,
+        ]
+        pcts = [
+            att.attempts_1_pct,
+            att.attempts_2_pct,
+            att.attempts_3_success_pct,
+            att.attempts_3_failed_pct,
+        ]
+
+        colors = [PALETTE["kept_terms"], PALETTE["rejected_duplicate"], "#2563EB", PALETTE["loss"]]
+
+        x = np.arange(len(categories))
+        width = 0.58
+
+        bars = ax.bar(x, counts, width, color=colors, edgecolor="white", linewidth=0.8)
+
+        max_count = max(counts) if counts else 1
+        y_offset = max_count * 0.025
+        ax.set_ylim(0, max_count * 1.25)
+
+        for bar, count, pct in zip(bars, counts, pcts):
+            label_text = f"{count:,}\n({pct:.1f}%)"
+            ax.text(
+                bar.get_x() + bar.get_width() / 2,
+                bar.get_height() + y_offset,
+                label_text,
+                ha="center", va="bottom", fontsize=6.8, fontweight="bold",
+                color="#1E293B", linespacing=0.95
+            )
+
+        ax.set_xticks(x)
+        ax.set_xticklabels(categories, fontsize=7)
+        ax.set_ylabel("N° Consultas")
+        ax.grid(axis="y", linestyle="--", alpha=0.3, linewidth=0.5)
+
+        timeout_msg = f"Timeouts: {att.timeouts_count} (0.0%)"
+        ax.text(
+            0.98, 0.95, timeout_msg,
+            transform=ax.transAxes,
+            ha="right", va="top",
+            fontsize=7, color="#64748B", style="italic"
+        )
+    else:
+        ax.text(0.5, 0.5, "Sin datos de intentos", ha="center", va="center", fontsize=8)
+        ax.axis("off")
+
+    return _save_figure(fig, output_dir, "05_llm_attempts_bar")
+
+
 # ── Full Suite Generation ──────────────────────────────────────────────────────
 def generate_all_plots(
     analyzer: BenchmarkAnalyzer,
@@ -519,6 +590,7 @@ def generate_all_plots(
     fig_paths["time_breakdown"] = plot_time_breakdown(analyzer, metrics, output_dir)
     fig_paths["lexicon_filtering"] = plot_lexicon_filtering_donut(analyzer, metrics, output_dir)
     fig_paths["terms_distribution"] = plot_terms_distribution(analyzer, metrics, output_dir)
+    fig_paths["llm_attempts"] = plot_llm_attempts(analyzer, metrics, output_dir)
 
     # Export JSON metrics summary
     json_path = os.path.join(output_dir, "summary_metrics.json")
@@ -576,6 +648,16 @@ def generate_all_plots(
         f.write(f"  • Tasa de Supervivencia en Consulta  : {lex.survival_rate_pct:.2f}%\n")
         f.write(f"  • Tasa de Rechazo / Alucinación      : {lex.hallucination_rate_pct:.2f}%\n")
         f.write(f"  • Longitud Promedio Query Expandida  : {lex.q_terms_expanded_mean:.2f} términos\n")
+
+        if metrics.attempts is not None and metrics.attempts.total_queries > 0:
+            att = metrics.attempts
+            f.write("\n── 4. REINTENTOS DEL LLM Y TIMEOUTS ──────────────────────────────────\n")
+            f.write(f"  • 1 intento  (éxito inmediato)     : {att.attempts_1_count:,} ({att.attempts_1_pct:.2f}%)\n")
+            f.write(f"  • 2 intentos (1 reintento)         : {att.attempts_2_count:,} ({att.attempts_2_pct:.2f}%)\n")
+            f.write(f"  • 3 intentos (éxito en 3° intento) : {att.attempts_3_success_count:,} ({att.attempts_3_success_pct:.2f}%)\n")
+            f.write(f"  • 3 intentos (fallido / sin éxito) : {att.attempts_3_failed_count:,} ({att.attempts_3_failed_pct:.2f}%)\n")
+            f.write(f"  • Timeouts (límite superado)       : {att.timeouts_count:,} ({att.timeouts_pct:.2f}%)\n")
+
         f.write("=" * 70 + "\n")
     fig_paths["summary_txt"] = txt_path
 

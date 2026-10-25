@@ -75,6 +75,7 @@ def test_analyzer_with_synthetic_data():
         assert os.path.isfile(paths["time_breakdown"])
         assert os.path.isfile(paths["lexicon_filtering"])
         assert os.path.isfile(paths["terms_distribution"])
+        assert os.path.isfile(paths["llm_attempts"])
         assert os.path.isfile(paths["summary_json"])
         assert os.path.isfile(paths["summary_txt"])
 
