@@ -55,6 +55,7 @@ class TimingBreakdown:
     text_fetch_pct: float
     llm_inference_pct: float
     second_pass_pct: float
+    total_time_sum: float = 0.0
 
 
 @dataclass
@@ -129,6 +130,22 @@ class AnalysisMetrics:
     lexicon: LexiconFilterMetrics
     attempts: AttemptsMetrics | None = None
 
+    # MRR breakdown: all queries (including unexpanded) vs expanded queries only
+    mrr_bm25_mean: float = 0.0
+    mrr_rag_all_mean: float = 0.0
+    mrr_rag_expanded_mean: float = 0.0
+    mrr_prf_all_mean: float = 0.0
+    mrr_prf_expanded_mean: float = 0.0
+    mrr_diff_all: float = 0.0
+    mrr_relative_gain_all_pct: float = 0.0
+    mrr_diff_expanded: float = 0.0
+    mrr_relative_gain_expanded_pct: float = 0.0
+    rag_expanded_count: int = 0
+    rag_unexpanded_count: int = 0
+    prf_expanded_count: int = 0
+    prf_unexpanded_count: int = 0
+    timings_bm25: TimingBreakdown | None = None
+
     def to_dict(self) -> dict[str, Any]:
         """Convert metrics to a serializable dictionary."""
         return asdict(self)
@@ -145,6 +162,7 @@ class BenchmarkAnalyzer:
         self.file_path = os.path.abspath(file_path)
         self.file_stem = os.path.splitext(os.path.basename(file_path))[0]
         self._df: pd.DataFrame | None = None
+        self._bm25_df: pd.DataFrame | None = None
         self._rag_df: pd.DataFrame | None = None
         self._prf_df: pd.DataFrame | None = None
         self._merged_df: pd.DataFrame | None = None
@@ -185,7 +203,8 @@ class BenchmarkAnalyzer:
 
         self._df = df
 
-        # Filter RAG and PRF
+        # Filter BM25, RAG and PRF
+        self._bm25_df = df[df["method_norm"] == "bm25"].copy()
         self._rag_df = df[df["method_norm"] == "rag"].copy()
         self._prf_df = df[df["method_norm"].isin(["prf", "prfc", "prf_classic"])].copy()
 
@@ -195,11 +214,39 @@ class BenchmarkAnalyzer:
             raise ValueError("No se encontraron registros para el método 'prf'/'prfc' en el archivo.")
 
         # Ensure queryid is string
+        if not self._bm25_df.empty:
+            self._bm25_df["queryid"] = self._bm25_df["queryid"].astype(str)
         self._rag_df["queryid"] = self._rag_df["queryid"].astype(str)
         self._prf_df["queryid"] = self._prf_df["queryid"].astype(str)
 
+        # Build BM25 lookup for queries where mrr was left empty because query stayed unchanged
+        bm25_mrr_map: dict[str, float] = {}
+        if not self._bm25_df.empty and "mrr" in self._bm25_df.columns:
+            bm25_mrr_map = dict(zip(self._bm25_df["queryid"], self._bm25_df["mrr"]))
+
+        # Compute mrr_all (including unexpanded queries) and mrr_expanded (only n_terms_kept > 0)
+        self._rag_df["mrr_all"] = self._rag_df["mrr"].copy()
+        if bm25_mrr_map:
+            missing_rag = self._rag_df["mrr_all"].isna()
+            self._rag_df.loc[missing_rag, "mrr_all"] = (
+                self._rag_df.loc[missing_rag, "queryid"].map(bm25_mrr_map)
+            )
+        self._rag_df["mrr_expanded"] = self._rag_df["mrr_all"].copy()
+        if "n_terms_kept" in self._rag_df.columns:
+            self._rag_df.loc[self._rag_df["n_terms_kept"].fillna(0) <= 0, "mrr_expanded"] = np.nan
+
+        self._prf_df["mrr_all"] = self._prf_df["mrr"].copy()
+        if bm25_mrr_map:
+            missing_prf = self._prf_df["mrr_all"].isna()
+            self._prf_df.loc[missing_prf, "mrr_all"] = (
+                self._prf_df.loc[missing_prf, "queryid"].map(bm25_mrr_map)
+            )
+        self._prf_df["mrr_expanded"] = self._prf_df["mrr_all"].copy()
+        if "n_terms_kept" in self._prf_df.columns:
+            self._prf_df.loc[self._prf_df["n_terms_kept"].fillna(0) <= 0, "mrr_expanded"] = np.nan
+
         # In RAG, queries where n_terms_kept == 0 stayed as the original query
-        # and should be excluded from MRR@10 and gain/loss evaluation
+        # and should be excluded from expanded-only gain/loss evaluation
         if "n_terms_kept" in self._rag_df.columns:
             self._rag_df.loc[self._rag_df["n_terms_kept"] == 0, "mrr"] = np.nan
 
@@ -268,6 +315,7 @@ class BenchmarkAnalyzer:
         t_total = df_sub.get("time_seconds", t_first + t_fetch + t_llm + t_second)
 
         total_mean = float(t_total.mean()) if not t_total.empty else 0.0
+        total_sum = float(t_total.sum()) if not t_total.empty else 0.0
         first_mean = float(t_first.mean()) if not t_first.empty else 0.0
         fetch_mean = float(t_fetch.mean()) if not t_fetch.empty else 0.0
         llm_mean = float(t_llm.mean()) if not t_llm.empty else 0.0
@@ -291,6 +339,7 @@ class BenchmarkAnalyzer:
             text_fetch_pct=round((fetch_mean / denom) * 100, 2),
             llm_inference_pct=round((llm_mean / denom) * 100, 2),
             second_pass_pct=round((second_mean / denom) * 100, 2),
+            total_time_sum=round(total_sum, 4),
         )
 
     def compute_lexicon_filter_metrics(self) -> LexiconFilterMetrics:
@@ -374,11 +423,43 @@ class BenchmarkAnalyzer:
         gain_loss = self.compute_gain_loss_metrics()
         timings_rag = self._compute_timing_breakdown(self._rag_df, "RAG (LLM)")
         timings_prf = self._compute_timing_breakdown(self._prf_df, "PRF")
+        timings_bm25 = (
+            self._compute_timing_breakdown(self._bm25_df, "BM25")
+            if self._bm25_df is not None and not self._bm25_df.empty
+            else None
+        )
         lexicon = self.compute_lexicon_filter_metrics()
         attempts = self.compute_attempts_metrics()
 
-        mrr_rag = float(self._rag_df["mrr"].dropna().mean())
-        mrr_prf = float(self._prf_df["mrr"].dropna().mean())
+        mrr_bm25 = (
+            float(self._bm25_df["mrr"].dropna().mean())
+            if self._bm25_df is not None and not self._bm25_df.empty and self._bm25_df["mrr"].notna().any()
+            else 0.0
+        )
+
+        rag_all_s = self._rag_df["mrr_all"].dropna()
+        rag_exp_s = self._rag_df["mrr_expanded"].dropna()
+        prf_all_s = self._prf_df["mrr_all"].dropna()
+        prf_exp_s = self._prf_df["mrr_expanded"].dropna()
+
+        mrr_rag_all = float(rag_all_s.mean()) if not rag_all_s.empty else 0.0
+        mrr_rag_exp = float(rag_exp_s.mean()) if not rag_exp_s.empty else 0.0
+        mrr_prf_all = float(prf_all_s.mean()) if not prf_all_s.empty else 0.0
+        mrr_prf_exp = float(prf_exp_s.mean()) if not prf_exp_s.empty else 0.0
+
+        rag_exp_count = int(len(rag_exp_s))
+        rag_unexp_count = int(len(self._rag_df) - rag_exp_count)
+        prf_exp_count = int(len(prf_exp_s))
+        prf_unexp_count = int(len(self._prf_df) - prf_exp_count)
+
+        mrr_diff_all = mrr_rag_all - mrr_prf_all
+        mrr_gain_all_pct = (mrr_diff_all / mrr_prf_all * 100.0) if mrr_prf_all > 0 else 0.0
+
+        mrr_diff_exp = mrr_rag_exp - mrr_prf_exp
+        mrr_gain_exp_pct = (mrr_diff_exp / mrr_prf_exp * 100.0) if mrr_prf_exp > 0 else 0.0
+
+        mrr_rag = mrr_rag_exp
+        mrr_prf = mrr_prf_all
         mrr_diff = mrr_rag - mrr_prf
         mrr_gain_pct = ((mrr_diff) / mrr_prf * 100.0) if mrr_prf > 0 else 0.0
 
@@ -401,6 +482,20 @@ class BenchmarkAnalyzer:
             timings_prf=timings_prf,
             lexicon=lexicon,
             attempts=attempts,
+            mrr_bm25_mean=round(mrr_bm25, 4),
+            mrr_rag_all_mean=round(mrr_rag_all, 4),
+            mrr_rag_expanded_mean=round(mrr_rag_exp, 4),
+            mrr_prf_all_mean=round(mrr_prf_all, 4),
+            mrr_prf_expanded_mean=round(mrr_prf_exp, 4),
+            mrr_diff_all=round(mrr_diff_all, 4),
+            mrr_relative_gain_all_pct=round(mrr_gain_all_pct, 2),
+            mrr_diff_expanded=round(mrr_diff_exp, 4),
+            mrr_relative_gain_expanded_pct=round(mrr_gain_exp_pct, 2),
+            rag_expanded_count=rag_exp_count,
+            rag_unexpanded_count=rag_unexp_count,
+            prf_expanded_count=prf_exp_count,
+            prf_unexpanded_count=prf_unexp_count,
+            timings_bm25=timings_bm25,
         )
 
     def compute_attempts_metrics(self) -> AttemptsMetrics:

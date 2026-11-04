@@ -182,6 +182,9 @@ class PRFExpander:
                 "time_text_fetch": 0.0,
                 "time_llm": 0.0,
                 "time_second_pass": 0.0,
+                "n_terms_proposed": 0,
+                "n_terms_kept": 0,
+                "is_expanded": False,
             }
             return safe_query, first_results, timings
 
@@ -212,6 +215,7 @@ class PRFExpander:
             "time_second_pass": round(elapsed_second, 4),
             "n_terms_proposed": n_prf,
             "n_terms_kept": n_prf,
+            "is_expanded": n_prf > 0,
         }
 
         return expanded_query, results, timings

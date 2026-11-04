@@ -119,7 +119,7 @@ def plot_gain_loss_per_query(
     Column width ~3.4 inches.
     """
     _apply_plot_style()
-    merged = analyzer.merged_df.sort_values(by="delta_rr", ascending=True).reset_index(drop=True)
+    merged = analyzer.merged_df.dropna(subset=["delta_rr"]).sort_values(by="delta_rr", ascending=True).reset_index(drop=True)
     delta = merged["delta_rr"].to_numpy()
     x = np.arange(len(delta))
 
@@ -605,12 +605,21 @@ def generate_all_plots(
         f.write(f"REPORTE DE ANÁLISIS: {metrics.file_stem}\n")
         f.write("=" * 70 + "\n\n")
         f.write(f"Archivo origen: {metrics.source_file}\n")
-        f.write(f"Consultas comunes analizadas (RAG vs PRF): {metrics.common_query_count:,}\n\n")
+        f.write(f"Consultas totales evaluadas: {metrics.rag_query_count:,}\n")
+        f.write(f"Consultas expandidas RAG: {metrics.rag_expanded_count:,} ({metrics.rag_unexpanded_count:,} sin expandir)\n")
+        f.write(f"Consultas expandidas PRF: {metrics.prf_expanded_count:,} ({metrics.prf_unexpanded_count:,} sin expandir)\n\n")
 
         f.write("── 1. MÉTRICAS DE EFECTIVIDAD (MRR@10) ────────────────────────────────\n")
-        f.write(f"  • MRR@10 RAG (LLM) : {metrics.mrr_rag_mean:.4f}\n")
-        f.write(f"  • MRR@10 PRF       : {metrics.mrr_prf_mean:.4f}\n")
-        f.write(f"  • Diferencia (Δ)   : {metrics.mrr_diff:+.4f} ({metrics.mrr_relative_gain_pct:+.2f}% relativo)\n\n")
+        if metrics.mrr_bm25_mean > 0:
+            f.write(f"  • MRR@10 BM25 Base                            : {metrics.mrr_bm25_mean:.4f}\n")
+        f.write("  [A] Con todas las consultas (incluyendo no expandidas):\n")
+        f.write(f"      - MRR@10 RAG (todas)                      : {metrics.mrr_rag_all_mean:.4f} ({metrics.rag_query_count:,} queries)\n")
+        f.write(f"      - MRR@10 PRF (todas)                      : {metrics.mrr_prf_all_mean:.4f} ({metrics.prf_query_count:,} queries)\n")
+        f.write(f"      - Diferencia (Δ RAG − PRF)                : {metrics.mrr_diff_all:+.4f} ({metrics.mrr_relative_gain_all_pct:+.2f}% relativo)\n")
+        f.write("  [B] Solo consultas expandidas (excluyendo sin cambios):\n")
+        f.write(f"      - MRR@10 RAG (solo expandidas)            : {metrics.mrr_rag_expanded_mean:.4f} ({metrics.rag_expanded_count:,} queries)\n")
+        f.write(f"      - MRR@10 PRF (solo expandidas)            : {metrics.mrr_prf_expanded_mean:.4f} ({metrics.prf_expanded_count:,} queries)\n")
+        f.write(f"      - Diferencia (Δ RAG − PRF)                : {metrics.mrr_diff_expanded:+.4f} ({metrics.mrr_relative_gain_expanded_pct:+.2f}% relativo)\n\n")
 
         f.write("── 2. GANANCIAS Y PÉRDIDAS POR CONSULTA ───────────────────────────────\n")
         f.write(f"  • Consultas Mejoradas (RAG > PRF) : {metrics.gain_loss.improved_count:,} ({metrics.gain_loss.improved_pct:.2f}%)\n")
@@ -622,12 +631,16 @@ def generate_all_plots(
 
         f.write("── 3. TIEMPOS DE EJECUCIÓN E INFERENCIA ───────────────────────────────\n")
         f.write(f"  • TIEMPO PROMEDIO DE INFERENCIA LLM : {metrics.mean_inference_time_seconds:.4f} s\n")
-        f.write(f"  • RAG Tiempo Total Promedio         : {metrics.timings_rag.total_time_mean:.4f} s\n")
+        if metrics.timings_bm25 is not None:
+            f.write(f"  • BM25 Tiempo Total / Promedio      : {metrics.timings_bm25.total_time_sum:.1f} s / {metrics.timings_bm25.total_time_mean:.4f} s/query\n")
+        f.write(f"  • RAG Tiempo Total                  : {metrics.timings_rag.total_time_sum:.1f} s\n")
+        f.write(f"  • RAG Tiempo Promedio por Consulta  : {metrics.timings_rag.total_time_mean:.4f} s\n")
         f.write(f"      - 1ª Pasada (BM25)              : {metrics.timings_rag.first_pass_mean:.4f} s ({metrics.timings_rag.first_pass_pct:.1f}%)\n")
         f.write(f"      - Text Fetch                    : {metrics.timings_rag.text_fetch_mean:.4f} s ({metrics.timings_rag.text_fetch_pct:.2f}%)\n")
         f.write(f"      - Inferencia LLM                : {metrics.timings_rag.llm_inference_mean:.4f} s ({metrics.timings_rag.llm_inference_pct:.1f}%)\n")
         f.write(f"      - 2ª Pasada                     : {metrics.timings_rag.second_pass_mean:.4f} s ({metrics.timings_rag.second_pass_pct:.1f}%)\n")
-        f.write(f"  • PRF Tiempo Total Promedio         : {metrics.timings_prf.total_time_mean:.4f} s\n")
+        f.write(f"  • PRF Tiempo Total                  : {metrics.timings_prf.total_time_sum:.1f} s\n")
+        f.write(f"  • PRF Tiempo Promedio por Consulta  : {metrics.timings_prf.total_time_mean:.4f} s\n")
         f.write(f"      - 1ª Pasada                     : {metrics.timings_prf.first_pass_mean:.4f} s ({metrics.timings_prf.first_pass_pct:.1f}%)\n")
         f.write(f"      - 2ª Pasada                     : {metrics.timings_prf.second_pass_mean:.4f} s ({metrics.timings_prf.second_pass_pct:.1f}%)\n\n")
 
