@@ -163,30 +163,69 @@ python main.py --max-queries 4000 --offset 0
 > [!TIP]
 > Para datasets muy grandes (100k+ queries), se recomienda ejecutar el benchmark en pasadas incrementales usando `--offset` y `--max-queries`. Los resultados se exportan con timestamp en el nombre del archivo para evitar sobreescrituras.
 
-## Módulo de Análisis de Resultados
+## Módulos de Análisis de Resultados
 
-El paquete `analysis` permite procesar un archivo CSV generado por una ejecución del benchmark y generar automáticamente visualizaciones y reportes detallados en alta resolución:
+El paquete `analysis` cuenta con dos modos de análisis:
+1. **Análisis de una corrida particular** (`analyzer_single_run` / `run_single_analysis.py`).
+2. **Análisis general multi-corrida** (`analyzer_summary` / `analyzer_summary.py`).
+
+---
+
+### 1. Análisis de una corrida en particular (`analyzer_single_run`)
+
+Procesa el archivo CSV generado por una corrida individual del benchmark (`benchmark_results_<timestamp>.csv`) y genera visualizaciones (`.pdf` vectoriales y `.png` en alta resolución) junto con el reporte de métricas:
 
 ```bash
-# Ejecutar análisis sobre un archivo de resultados
-python run_analysis.py --file "/ruta/a/benchmark_results_<timestamp>.csv"
+# Usando el script de corrida particular
+python run_single_analysis.py --file "/ruta/a/benchmark_results_<timestamp>.csv"
 
-# O como módulo Python:
+# (Alias compatibles)
+python run_analysis.py --file "/ruta/a/benchmark_results_<timestamp>.csv"
 python -m analysis --file "/ruta/a/benchmark_results_<timestamp>.csv"
 ```
 
-### Gráficos generados
+#### Gráficos y reportes generados (`output/figures/<nombre_del_archivo>/`)
 
-Las figuras se almacenan automáticamente en `./figures/<nombre_del_archivo>/`:
+1. **`01_gain_loss_per_query.pdf` (`.png`)**: Perfil continuo (waterfall) ordenado por $\Delta(q) = RR_{RAG}(q) - RR_{PRF}(q)$ con el conteo de consultas mejoradas, neutras y degradadas.
+2. **`01b_gain_loss_donut.pdf` (`.png`)**: Proporción porcentual de consultas mejoradas, neutras y degradadas y balance neto.
+3. **`02_time_breakdown_stacked.pdf` (`.png`)**: Desglose porcentual y absoluto de tiempos de ejecución (1ª pasada BM25, Text Fetch, Inferencia LLM y 2ª pasada).
+4. **`03_lexicon_filtering_donut.pdf` (`.png`)**: Proporción de términos propuestos por el LLM aceptados vs. rechazados (alucinación fuera del lexicón, duplicados, stopwords, truncados).
+5. **`04_terms_distribution_per_query.pdf` (`.png`)**: Distribución de cantidad de términos propuestos y aceptados por consulta.
+6. **`05_llm_attempts_bar.pdf` (`.png`)**: Distribución de intentos de expansión del LLM (1, 2 o 3 intentos) y timeouts.
+7. **`summary_metrics.json`** y **`summary_report.txt`**: Reporte detallado con MRR@10 (tanto sobre **todas las consultas** como **solo sobre consultas expandidas** para PRF y RAG), tiempos totales y tiempos promedio por consulta.
 
-1. **`01_gain_loss_per_query.png`**: Análisis de ganancias y pérdidas por consulta.
-   - Perfil continuo (waterfall) ordenado por $\Delta(q) = RR_{RAG}(q) - RR_{PRF}(q)$.
-   - Histograma de distribución de diferencias y balance neto de consultas mejoradas, neutras y degradadas.
-2. **`02_time_breakdown_stacked.png`**: Barras apiladas del desglose de tiempos de ejecución.
-   - Comparación PRF vs RAG (1ª pasada BM25, Text Fetch, Inferencia LLM, 2ª pasada).
-   - Vista absoluta (segundos) y porcentual (100% stacked).
-   - Cálculo destacado del **tiempo promedio de inferencia LLM** del archivo.
-3. **`03_lexicon_filtering_hallucination.png`**: Filtrado de lexicón y alucinación del LLM.
-   - Ciclo de vida de términos (originales, propuestos por LLM, aceptados en el índice y expandidos).
-   - Cuantificación de la tasa de alucinación (términos fuera del vocabulario de la colección) vs tasa de supervivencia.
-4. **`summary_metrics.json`** y **`summary_report.txt`**: Resumen numérico y reporte textual con todas las métricas agregadas.
+---
+
+### 2. Análisis general multi-corrida (`analyzer_summary`)
+
+Procesa una tabla CSV resumen con múltiples configuraciones de hiperparámetros (`FEEDBACK_DOCS` $\times$ `FEEDBACK_TERMS`, por defecto en `./data/benchmark_summary.csv`) y permite elegir si graficar con las columnas de **"Todas las queries"** (valor por defecto) o **"Solo expandidas"**.
+
+```bash
+# Ejecutar análisis general con "Todas las queries" (por defecto)
+python analyzer_summary.py --file data/benchmark_summary.csv
+
+# Ejecutar explícitamente con "Todas las queries"
+python analyzer_summary.py --file data/benchmark_summary.csv --queries all
+
+# Ejecutar con las columnas de "Solo expandidas"
+python analyzer_summary.py --file data/benchmark_summary.csv --queries expanded
+
+# También disponible como módulo de Python:
+python -m analysis.analyzer_summary --file data/benchmark_summary.csv --queries all
+```
+
+#### Parámetros de `analyzer_summary`
+
+| Parámetro | Descripción | Valor por defecto |
+|---|---|---|
+| `--file`, `-f` | Ruta al archivo CSV de resumen general multi-corrida | `data/benchmark_summary.csv` |
+| `--queries`, `-q` | Conjunto de consultas para calcular MRR@10: `all` / `todas` (**Todas las queries**) o `expanded` / `expandidas` (**Solo expandidas**) | `all` |
+| `--output-dir`, `-o` | Directorio de salida para los gráficos y reportes | `output/figures/summary_todas/` (o `summary_solo_expandidas/`) |
+
+#### Gráficos y reportes generados (`output/figures/summary_<modo>/`)
+
+1. **`01_mrr_vs_fb_terms.pdf` (`.png`)**: **MRR@10 vs. `fb_terms`** — curvas de efectividad para RAG (LLM) y PRF según la cantidad de términos añadidos ($1, 2, 3, 5$) para cada valor de `fb_docs` ($3, 5, 10$), junto con la línea base de BM25.
+2. **`02_mrr_vs_fb_docs.pdf` (`.png`)**: **MRR@10 vs. `fb_docs`** — curvas de efectividad en función de la cantidad de documentos de contexto ($3, 5, 10$) para cada valor de `fb_terms` ($1, 2, 3, 5$), junto con la línea base de BM25.
+3. **`03_effectiveness_vs_cost.pdf` (`.png`)**: **Efectividad vs. costo** — gráfico de dispersión con el tiempo promedio por consulta en el eje X (**escala logarítmica**) y MRR@10 en el eje Y, mostrando un punto por cada configuración $(fb\_docs, fb\_terms)$ de RAG, PRF y la línea base BM25.
+4. **`04_inference_time_vs_fb_docs.pdf` (`.png`)**: **Tiempo de inferencia vs. `fb_docs`** — muestra el crecimiento casi lineal del tiempo por consulta de RAG respecto a `fb_docs`, incluyendo las series por `fb_terms`, los promedios por punto y la recta de ajuste lineal ($R^2$).
+5. **`summary_general_metrics.json`** y **`summary_general_report.txt`**: Resumen numérico y tabla comparativa de todas las configuraciones evaluadas.
