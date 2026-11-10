@@ -94,18 +94,16 @@ def _format_time_compact(sec: float) -> str:
 
 def _save_figure(fig: plt.Figure, output_dir: str, filename_stem: str) -> str:
     """
-    Save figure as publication-ready vector PDF and companion PNG.
-    
-    Returns the path to the primary vector PDF.
+    Save figure as high-resolution PNG.
+
+    Returns the path to the saved PNG file.
     """
     os.makedirs(output_dir, exist_ok=True)
-    pdf_path = os.path.join(output_dir, f"{filename_stem}.pdf")
     png_path = os.path.join(output_dir, f"{filename_stem}.png")
 
-    fig.savefig(pdf_path, format="pdf", bbox_inches="tight", pad_inches=0.02)
     fig.savefig(png_path, format="png", dpi=300, bbox_inches="tight", pad_inches=0.02)
     plt.close(fig)
-    return pdf_path
+    return png_path
 
 
 # ── Chart 1: Per-query Gain/Loss Waterfall Silhouette ──────────────────────────
@@ -150,7 +148,7 @@ def plot_gain_loss_per_query(
     ax.set_xlim(-max(len(delta) * 0.02, 1), len(delta) + max(len(delta) * 0.02, 1))
     ax.set_ylim(-1.05, 1.05)
     ax.set_xlabel("Consultas (ordenadas)")
-    ax.set_ylabel(r"$\Delta$ RR ($RR_{\mathrm{RAG}} - RR_{\mathrm{PRF}}$)")
+    ax.set_ylabel(r"$\Delta$ RR ($RR_{\mathrm{LLM}} - RR_{\mathrm{PRF}}$)")
     ax.grid(axis="y", linestyle="--", alpha=0.3, linewidth=0.5)
     ax.legend(loc="upper left", frameon=False, fontsize=7.5, handlelength=1.0)
 
@@ -226,7 +224,7 @@ def plot_time_breakdown(
     _apply_plot_style()
     fig, ax = plt.subplots(figsize=(3.4, 2.7))
 
-    methods = ["PRF", "RAG"]
+    methods = ["PRF", "LLM"]
     t_prf = metrics.timings_prf
     t_rag = metrics.timings_rag
 

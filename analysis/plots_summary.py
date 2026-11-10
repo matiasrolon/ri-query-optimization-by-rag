@@ -56,7 +56,7 @@ def plot_mrr_vs_fb_terms(
     output_dir: str,
 ) -> str:
     """
-    Generate Chart 1: MRR@10 vs. FEEDBACK_TERMS for RAG (LLM) and PRF across fb_docs,
+    Generate Chart 1: MRR@10 vs. FEEDBACK_TERMS for LLM and PRF across fb_docs,
     plus BM25 baseline reference.
     """
     _apply_plot_style()
@@ -78,7 +78,7 @@ def plot_mrr_vs_fb_terms(
         color = DOCS_COLORS.get(fb_docs, "#1E293B")
         marker = DOCS_MARKERS.get(fb_docs, "o")
 
-        # RAG (LLM) — solid line
+        # LLM — solid line
         ax.plot(
             sub["fb_terms"],
             sub["mrr_llm_selected"],
@@ -87,7 +87,7 @@ def plot_mrr_vs_fb_terms(
             linewidth=1.4,
             marker=marker,
             markersize=4.5,
-            label=f"RAG ($d={fb_docs}$)",
+            label=f"LLM ($d={fb_docs}$)",
             zorder=4,
         )
 
@@ -133,7 +133,7 @@ def plot_mrr_vs_fb_docs(
     output_dir: str,
 ) -> str:
     """
-    Generate Chart 2: MRR@10 vs. FEEDBACK_DOCS for RAG (LLM) and PRF across fb_terms,
+    Generate Chart 2: MRR@10 vs. FEEDBACK_DOCS for LLM and PRF across fb_terms,
     plus BM25 baseline reference.
     """
     _apply_plot_style()
@@ -155,7 +155,7 @@ def plot_mrr_vs_fb_docs(
         color = TERMS_COLORS.get(fb_terms, "#1E293B")
         marker = TERMS_MARKERS.get(fb_terms, "o")
 
-        # RAG (LLM) — solid line
+        # LLM — solid line
         ax.plot(
             sub["fb_docs"],
             sub["mrr_llm_selected"],
@@ -164,7 +164,7 @@ def plot_mrr_vs_fb_docs(
             linewidth=1.4,
             marker=marker,
             markersize=4.5,
-            label=f"RAG ($t={fb_terms}$)",
+            label=f"LLM ($t={fb_terms}$)",
             zorder=4,
         )
 
@@ -211,111 +211,77 @@ def plot_effectiveness_vs_cost(
 ) -> str:
     """
     Generate Chart 3: Scatter plot of MRR@10 (Y) vs. average time per query in seconds
-    on a logarithmic X axis, one point per configuration.
+    on a logarithmic X axis, one point per configuration, matching the style of Charts 1 & 2.
     """
     _apply_plot_style()
     df = analyzer.df
     fig, ax = plt.subplots(figsize=(3.5, 2.4))
 
-    # BM25 baseline line + point
+    # BM25 horizontal baseline (matching Charts 1 & 2)
     ax.axhline(
         metrics.mrr_bm25_baseline,
-        color="#64748B",
+        color="#334155",
         linestyle=":",
-        linewidth=0.9,
-        zorder=1,
-    )
-    ax.scatter(
-        [metrics.time_bm25_avg_baseline],
-        [metrics.mrr_bm25_baseline],
-        color="#0F172A",
-        marker="*",
-        s=55,
-        label="BM25 Base",
-        zorder=5,
+        linewidth=1.1,
+        label=f"BM25 Base ({metrics.mrr_bm25_baseline:.4f})",
+        zorder=2,
     )
 
-    # PRF points (one per configuration)
     for fb_docs in metrics.fb_docs_values:
-        sub = df[df["fb_docs"] == fb_docs]
-        color = DOCS_COLORS.get(fb_docs, "#2563EB")
+        sub = df[df["fb_docs"] == fb_docs].sort_values("fb_terms")
+        color = DOCS_COLORS.get(fb_docs, "#1E293B")
         marker = DOCS_MARKERS.get(fb_docs, "o")
-        ax.scatter(
-            sub["time_prf_avg"],
-            sub["mrr_prf_selected"],
-            facecolors="white",
-            edgecolors=color,
-            marker=marker,
-            s=30,
-            linewidths=1.2,
-            label=f"PRF ($d={fb_docs}$)",
-            zorder=4,
-        )
 
-    # Custom non-overlapping offsets per (d, t)
-    label_offsets = {
-        (3, 1): (-5, 3, "right"),
-        (3, 2): (-5, -5, "right"),
-        (3, 3): (-5, -2, "right"),
-        (3, 5): (-5, -2, "right"),
-        (5, 1): (0, 5, "center"),
-        (5, 2): (5, 2, "left"),
-        (5, 3): (5, -4, "left"),
-        (5, 5): (5, -2, "left"),
-        (10, 1): (5, 1, "left"),
-        (10, 2): (5, -2, "left"),
-        (10, 3): (5, -2, "left"),
-        (10, 5): (5, -2, "left"),
-    }
-
-    # RAG (LLM) points (one per configuration) + compact (d,t) annotations
-    for fb_docs in metrics.fb_docs_values:
-        sub = df[df["fb_docs"] == fb_docs]
-        color = DOCS_COLORS.get(fb_docs, "#15803D")
-        marker = DOCS_MARKERS.get(fb_docs, "o")
-        ax.scatter(
+        # LLM — solid line + filled markers (matching Chart 1)
+        ax.plot(
             sub["time_llm_avg"],
             sub["mrr_llm_selected"],
             color=color,
+            linestyle="-",
+            linewidth=1.4,
             marker=marker,
-            s=32,
-            label=f"RAG ($d={fb_docs}$)",
-            zorder=5,
+            markersize=4.5,
+            label=f"LLM ($d={fb_docs}$)",
+            zorder=4,
         )
-        for _, row in sub.iterrows():
-            d = int(row["fb_docs"])
-            t = int(row["fb_terms"])
-            x_val = float(row["time_llm_avg"])
-            y_val = float(row["mrr_llm_selected"])
-            dx, dy, ha_align = label_offsets.get((d, t), (4, 2, "left"))
-            ax.annotate(
-                f"({d},{t})",
-                xy=(x_val, y_val),
-                xytext=(dx, dy),
-                textcoords="offset points",
-                ha=ha_align,
-                va="center",
-                fontsize=6.2,
-                color="#1E293B",
-            )
+
+        # PRF — dashed line + white-filled markers (matching Chart 1)
+        ax.plot(
+            sub["time_prf_avg"],
+            sub["mrr_prf_selected"],
+            color=color,
+            linestyle="--",
+            linewidth=1.0,
+            marker=marker,
+            markersize=3.8,
+            markerfacecolor="white",
+            markeredgewidth=1.0,
+            alpha=0.85,
+            label=f"PRF ($d={fb_docs}$)",
+            zorder=3,
+        )
 
     ax.set_xscale("log")
-    ax.set_xlim(0.035, 30.0)
+    ax.set_xlim(0.035, 18.0)
     all_mrr = pd.concat([df["mrr_prf_selected"], df["mrr_llm_selected"]]).dropna()
-    ax.set_ylim(float(all_mrr.min()) - 0.0018, max(float(all_mrr.max()), metrics.mrr_bm25_baseline) + 0.0022)
+    ax.set_ylim(
+        float(all_mrr.min()) - 0.0012,
+        max(float(all_mrr.max()), metrics.mrr_bm25_baseline) + 0.0012,
+    )
     ax.set_xlabel("Tiempo promedio por consulta [s] (escala log)")
     ax.set_ylabel("MRR@10")
     ax.yaxis.set_major_formatter(ticker.FormatStrFormatter("%.3f"))
-    ax.grid(True, which="both", linestyle="--", alpha=0.3, linewidth=0.5)
+    ax.grid(True, which="major", linestyle="--", alpha=0.3, linewidth=0.5)
+    ax.grid(False, which="minor")
 
     ax.legend(
         loc="lower center",
         bbox_to_anchor=(0.5, 1.02),
         ncol=2,
         frameon=False,
-        fontsize=6.8,
-        handletextpad=0.3,
-        columnspacing=0.8,
+        fontsize=7.0,
+        handlelength=1.8,
+        columnspacing=1.0,
     )
 
     return _save_figure(fig, output_dir, "03_effectiveness_vs_cost")
@@ -333,7 +299,7 @@ def plot_inference_time_vs_fb_docs(
     """
     _apply_plot_style()
     df = analyzer.df
-    fig, ax = plt.subplots(figsize=(3.5, 2.3))
+    fig, ax = plt.subplots(figsize=(3.5, 2.4))
 
     for fb_terms in metrics.fb_terms_values:
         sub = df[df["fb_terms"] == fb_terms].sort_values("fb_docs")
@@ -344,11 +310,10 @@ def plot_inference_time_vs_fb_docs(
             sub["time_llm_avg"],
             color=color,
             linestyle="-",
-            linewidth=1.1,
+            linewidth=1.4,
             marker=marker,
-            markersize=4.2,
-            alpha=0.85,
-            label=f"$fb\\_terms={fb_terms}$",
+            markersize=4.5,
+            label=f"LLM ($t={fb_terms}$)",
             zorder=3,
         )
 
@@ -358,36 +323,16 @@ def plot_inference_time_vs_fb_docs(
     ax.plot(
         x_line,
         y_line,
-        color="#0F172A",
-        linestyle="--",
-        linewidth=1.4,
+        color="#334155",
+        linestyle=":",
+        linewidth=1.2,
         label=f"Ajuste lineal ($R^2={metrics.linear_fit_r2:.3f}$)",
         zorder=4,
     )
 
-    # Annotate mean time per fb_docs above the highest point at each fb_docs
-    grouped_means = df.groupby("fb_docs")["time_llm_avg"].mean()
-    grouped_max = df.groupby("fb_docs")["time_llm_avg"].max()
-    for fb_docs, mean_t in grouped_means.items():
-        top_y = float(grouped_max.loc[fb_docs])
-        ax.annotate(
-            f"Media: {mean_t:.2f}s",
-            xy=(fb_docs, top_y),
-            xytext=(0, 6),
-            textcoords="offset points",
-            ha="center",
-            fontsize=6.8,
-            fontweight="bold",
-            color="#0F172A",
-            bbox=dict(boxstyle="round,pad=0.15", facecolor="white", edgecolor="none", alpha=0.85),
-        )
-
-    min_t = float(df["time_llm_avg"].min())
-    max_t = float(df["time_llm_avg"].max())
-    ax.set_ylim(min_t - 0.6, max_t + 1.3)
     ax.set_xticks(metrics.fb_docs_values)
     ax.set_xlabel("Documentos de contexto ($fb\\_docs$)")
-    ax.set_ylabel("Tiempo por consulta RAG [s]")
+    ax.set_ylabel("Tiempo por consulta LLM [s]")
     ax.grid(True, linestyle="--", alpha=0.3, linewidth=0.5)
 
     ax.legend(
@@ -396,8 +341,8 @@ def plot_inference_time_vs_fb_docs(
         ncol=2,
         frameon=False,
         fontsize=7.0,
-        handlelength=1.6,
-        columnspacing=0.9,
+        handlelength=1.8,
+        columnspacing=1.0,
     )
 
     return _save_figure(fig, output_dir, "04_inference_time_vs_fb_docs")
