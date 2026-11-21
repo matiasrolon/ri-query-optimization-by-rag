@@ -2,21 +2,18 @@
 """
 General summary analyzer module across multiple benchmark runs/configurations.
 
-Processes a multi-run summary CSV table (varying FEEDBACK_DOCS and FEEDBACK_TERMS)
-and generates:
-  1. MRR@10 vs. fb_terms (line chart)
-  2. MRR@10 vs. fb_docs (line chart)
-  3. Effectiveness vs. Cost: MRR@10 vs. average query time on log scale (scatter plot)
-  4. Inference Time vs. fb_docs: shows the near-linear scaling with context length
+Processes a multi-run summary CSV table and supports discriminating either by:
+  - "config": FEEDBACK_DOCS and FEEDBACK_TERMS (default)
+  - "model":  LLM Model column
 
-Supports selecting between:
+Supports selecting between query subsets:
   - "all" ("Todas las queries", default)
   - "expanded" ("Solo expandidas")
 
 Usage:
-    python -m analysis.analyzer_summary --file data/benchmark_summary.csv
-    python -m analysis.analyzer_summary --file data/benchmark_summary.csv --queries expanded
-    python analyzer_summary.py --file data/benchmark_summary.csv --queries all
+    python analyzer_summary.py --file data/benchmark_summary.csv --group-by config
+    python analyzer_summary.py --file data/benchmark_summary_models.csv --group-by model
+    python analyzer_summary.py --file data/benchmark_summary_models.csv --group-by model --queries expanded
 """
 
 from __future__ import annotations
@@ -33,6 +30,7 @@ import numpy as np
 import pandas as pd
 
 QueryScope = Literal["all", "expanded"]
+GroupByMode = Literal["config", "model"]
 
 DEFAULT_SUMMARY_CSV = os.path.join("data", "benchmark_summary.csv")
 DEFAULT_TOTAL_QUERIES = 6980
@@ -52,7 +50,6 @@ def _parse_locale_float(val: Any) -> float:
         return np.nan
     s = s.replace("%", "").strip()
     if "." in s and "," in s:
-        # '.' is thousands separator, ',' is decimal separator
         s = s.replace(".", "").replace(",", ".")
     elif "," in s:
         s = s.replace(",", ".")
@@ -84,7 +81,7 @@ def _normalize_col_name(col: str) -> str:
 
 @dataclass
 class SummaryRunRecord:
-    """Normalized record for a single (fb_docs, fb_terms) configuration."""
+    """Normalized record for a single summary row."""
     fecha: str
     llm_model: str
     fb_docs: int
@@ -110,12 +107,15 @@ class SummaryRunRecord:
 
 @dataclass
 class SummaryAnalysisMetrics:
-    """Aggregated summary metrics across all parameter configurations."""
+    """Aggregated summary metrics across all parameter configurations or LLM models."""
     source_file: str
     file_stem: str
     query_scope: str
     query_scope_label: str
+    group_by: str
+    group_by_label: str
     total_configurations: int
+    llm_models: list[str]
     fb_docs_values: list[int]
     fb_terms_values: list[int]
     mrr_bm25_baseline: float
@@ -134,15 +134,22 @@ class SummaryAnalysisMetrics:
 
 class SummaryBenchmarkAnalyzer:
     """
-    Loads and analyzes the multi-run summary CSV across (FEEDBACK_DOCS, FEEDBACK_TERMS).
+    Loads and analyzes the multi-run summary CSV across (FEEDBACK_DOCS, FEEDBACK_TERMS)
+    or across LLM Models.
     """
 
-    def __init__(self, file_path: str, query_scope: QueryScope = "all"):
+    def __init__(
+        self,
+        file_path: str,
+        query_scope: QueryScope = "all",
+        group_by: GroupByMode = "config",
+    ):
         if not os.path.isfile(file_path):
             raise FileNotFoundError(f"El archivo especificado no existe: {file_path}")
         self.file_path = os.path.abspath(file_path)
         self.file_stem = os.path.splitext(os.path.basename(file_path))[0]
         self.query_scope: QueryScope = self._normalize_scope(query_scope)
+        self.group_by: GroupByMode = self._normalize_group_by(group_by)
         self._df: pd.DataFrame | None = None
         self._records: list[SummaryRunRecord] = []
 
@@ -158,9 +165,25 @@ class SummaryBenchmarkAnalyzer:
             "Use 'all' ('todas') o 'expanded' ('expandidas')."
         )
 
+    @staticmethod
+    def _normalize_group_by(group_by: str) -> GroupByMode:
+        g = str(group_by).strip().lower()
+        if g in ("config", "params", "parametros", "fb_docs", "fb_terms"):
+            return "config"
+        if g in ("model", "modelo", "llm", "llm_model", "llm model"):
+            return "model"
+        raise ValueError(
+            f"Valor inválido para --group-by: '{group_by}'. "
+            "Use 'config' (por FEEDBACK_DOCS/FEEDBACK_TERMS) o 'model' (por LLM Model)."
+        )
+
     @property
     def query_scope_label(self) -> str:
         return "Todas las queries" if self.query_scope == "all" else "Solo expandidas"
+
+    @property
+    def group_by_label(self) -> str:
+        return "Configuración (k, m)" if self.group_by == "config" else "Modelo LLM"
 
     def load_and_preprocess(self) -> pd.DataFrame:
         """Read the summary CSV (handling group header row and multi-line column names)."""
@@ -170,7 +193,6 @@ class SummaryBenchmarkAnalyzer:
         if not rows:
             raise ValueError(f"El archivo CSV está vacío: {self.file_path}")
 
-        # Find the row index that contains FEEDBACK_DOCS / FEEDBACK_TERMS
         header_idx = 0
         for idx, row in enumerate(rows[:5]):
             norm_cells = [_normalize_col_name(c) for c in row]
@@ -197,7 +219,12 @@ class SummaryBenchmarkAnalyzer:
 
             fb_docs = int(round(fb_docs_val))
             fb_terms = int(round(fb_terms_val))
-            comentarios = row_map.get("comentarios", "")
+            comentarios = (
+                row_map.get("comentarios")
+                or row_map.get("comentarios llm")
+                or row_map.get("comentarios prf")
+                or ""
+            )
             total_queries = _parse_total_queries_from_comment(comentarios, DEFAULT_TOTAL_QUERIES)
 
             mrr_bm25 = _parse_locale_float(row_map.get("mrr bm25"))
@@ -230,7 +257,6 @@ class SummaryBenchmarkAnalyzer:
                     sel_prf = mrr_prf_all
                     sel_llm = mrr_llm_all
                 else:
-                    # Fallback to expanded columns if TODAS cell is blank in CSV
                     sel_prf = mrr_prf_all if not np.isnan(mrr_prf_all) else mrr_prf_exp
                     sel_llm = mrr_llm_all if not np.isnan(mrr_llm_all) else mrr_llm_exp
                     used_fallback = True
@@ -269,7 +295,11 @@ class SummaryBenchmarkAnalyzer:
 
         self._records = records
         df = pd.DataFrame([asdict(r) for r in records])
-        df = df.sort_values(by=["fb_docs", "fb_terms"]).reset_index(drop=True)
+        if self.group_by == "config":
+            df = df.sort_values(by=["fb_docs", "fb_terms"]).reset_index(drop=True)
+        else:
+            # Preserve CSV model order or sort by fb_docs, fb_terms within model
+            df = df.reset_index(drop=True)
         self._df = df
         return df
 
@@ -280,42 +310,45 @@ class SummaryBenchmarkAnalyzer:
         return self._df
 
     def analyze(self) -> SummaryAnalysisMetrics:
-        """Compute summary statistics, best configurations, and linear latency fit."""
+        """Compute summary statistics, best configurations/models, and linear latency fit."""
         df = self.df
 
-        # Baseline BM25 MRR (use median to be robust against single-row typos like 0.1932 vs 0.1842)
         valid_bm25 = df["mrr_bm25"].dropna()
         mrr_bm25_baseline = float(valid_bm25.median()) if not valid_bm25.empty else 0.1842
 
         valid_bm25_t = df["time_bm25_avg"].dropna()
         time_bm25_baseline = float(valid_bm25_t.median()) if not valid_bm25_t.empty else 0.0560
 
+        # Preserve order of appearance for llm_models
+        llm_models = list(dict.fromkeys(df["llm_model"].tolist()))
         fb_docs_values = sorted(df["fb_docs"].unique().tolist())
         fb_terms_values = sorted(df["fb_terms"].unique().tolist())
 
-        # Best RAG config
+        # Best LLM row
         best_rag_idx = df["mrr_llm_selected"].idxmax()
         best_rag_row = df.loc[best_rag_idx]
         best_rag = {
+            "llm_model": str(best_rag_row["llm_model"]),
             "fb_docs": int(best_rag_row["fb_docs"]),
             "fb_terms": int(best_rag_row["fb_terms"]),
             "mrr": round(float(best_rag_row["mrr_llm_selected"]), 4),
             "time_avg": round(float(best_rag_row["time_llm_avg"]), 4),
         }
 
-        # Best PRF config
+        # Best PRF row
         best_prf_idx = df["mrr_prf_selected"].idxmax()
         best_prf_row = df.loc[best_prf_idx]
         best_prf = {
+            "llm_model": str(best_prf_row["llm_model"]),
             "fb_docs": int(best_prf_row["fb_docs"]),
             "fb_terms": int(best_prf_row["fb_terms"]),
             "mrr": round(float(best_prf_row["mrr_prf_selected"]), 4),
             "time_avg": round(float(best_prf_row["time_prf_avg"]), 4),
         }
 
-        # Linear fit: time_llm_avg vs fb_docs
+        # Linear fit: time_llm_avg vs fb_docs (when multiple fb_docs values exist)
         valid_time = df.dropna(subset=["fb_docs", "time_llm_avg"])
-        if len(valid_time) >= 2:
+        if len(fb_docs_values) >= 2 and len(valid_time) >= 2:
             x = valid_time["fb_docs"].to_numpy(dtype=float)
             y = valid_time["time_llm_avg"].to_numpy(dtype=float)
             slope, intercept = np.polyfit(x, y, 1)
@@ -327,7 +360,7 @@ class SummaryBenchmarkAnalyzer:
             slope, intercept, r2 = 0.0, 0.0, 0.0
 
         fallback_configs = [
-            f"(fb_docs={int(r['fb_docs'])}, fb_terms={int(r['fb_terms'])})"
+            f"({r['llm_model']}, k={int(r['fb_docs'])}, m={int(r['fb_terms'])})"
             for _, r in df[df["used_fallback_for_all"]].iterrows()
         ]
 
@@ -336,7 +369,10 @@ class SummaryBenchmarkAnalyzer:
             file_stem=self.file_stem,
             query_scope=self.query_scope,
             query_scope_label=self.query_scope_label,
+            group_by=self.group_by,
+            group_by_label=self.group_by_label,
             total_configurations=len(df),
+            llm_models=llm_models,
             fb_docs_values=fb_docs_values,
             fb_terms_values=fb_terms_values,
             mrr_bm25_baseline=round(mrr_bm25_baseline, 4),
@@ -357,8 +393,8 @@ def main(argv: list[str] | None = None) -> int:
 
     parser = argparse.ArgumentParser(
         description=(
-            "Analizador general de resultados agregados (múltiples corridas: "
-            "FEEDBACK_DOCS x FEEDBACK_TERMS)"
+            "Analizador general de resultados agregados (discriminando por "
+            "configuración FEEDBACK_DOCS/FEEDBACK_TERMS o por LLM Model)"
         )
     )
     parser.add_argument(
@@ -368,21 +404,32 @@ def main(argv: list[str] | None = None) -> int:
         help=f"Ruta al archivo CSV de resumen general (por defecto: {DEFAULT_SUMMARY_CSV}).",
     )
     parser.add_argument(
+        "--group-by", "-g",
+        type=str,
+        default="config",
+        choices=["config", "model", "params", "llm"],
+        help=(
+            "Parámetro por el cual discriminar en los gráficos generales: "
+            "'config' (FEEDBACK_DOCS y FEEDBACK_TERMS, por defecto) o "
+            "'model' (columna LLM Model)."
+        ),
+    )
+    parser.add_argument(
         "--queries", "-q",
         type=str,
         default="all",
         choices=["all", "expanded", "todas", "expandidas"],
         help=(
             "Conjunto de consultas a utilizar para calcular los gráficos de MRR@10: "
-            "'all'/'todas' (Todas las queries, por defecto) o "
-            "'expanded'/'expandidas' (Solo expandidas)."
+            "'all' (Todas las queries, por defecto) o "
+            "'expanded' (Solo expandidas)."
         ),
     )
     parser.add_argument(
         "--output-dir", "-o",
         type=str,
         default=None,
-        help="Directorio de salida para las figuras (por defecto: output/figures/summary_<scope>/).",
+        help="Directorio de salida para las figuras (por defecto: output/figures/summary_<group>_<scope>/).",
     )
     args = parser.parse_args(argv)
 
@@ -390,14 +437,23 @@ def main(argv: list[str] | None = None) -> int:
         print(f"❌ Error: El archivo especificado no existe:\n   {args.file}", file=sys.stderr)
         return 1
 
-    analyzer = SummaryBenchmarkAnalyzer(args.file, query_scope=args.queries)
-    scope_suffix = "todas" if analyzer.query_scope == "all" else "solo_expandidas"
-    out_dir = args.output_dir or os.path.join("output", "figures", f"summary_{scope_suffix}")
+    analyzer = SummaryBenchmarkAnalyzer(
+        args.file,
+        query_scope=args.queries,
+        group_by=args.group_by,
+    )
+    scope_suffix = "all" if analyzer.query_scope == "all" else "expanded"
+    if analyzer.group_by == "model":
+        default_out = os.path.join("output", "figures", f"summary_models_{scope_suffix}")
+    else:
+        default_out = os.path.join("output", "figures", f"summary_{scope_suffix}")
+    out_dir = args.output_dir or default_out
 
     print("\n" + "=" * 72)
-    print(" 📊 MÓDULO DE ANÁLISIS GENERAL (MULTI-CORRIDA): RAG vs PRF")
+    print(" 📊 MÓDULO DE ANÁLISIS GENERAL (MULTI-CORRIDA): LLM vs PRF")
     print("=" * 72)
     print(f"  • Archivo analizado   : {args.file}")
+    print(f"  • Discriminado por    : {analyzer.group_by_label} ({analyzer.group_by})")
     print(f"  • Modo de consultas   : {analyzer.query_scope_label} ({analyzer.query_scope})")
     print(f"  • Directorio salida   : {os.path.abspath(out_dir)}")
     print("=" * 72 + "\n")
@@ -411,21 +467,23 @@ def main(argv: list[str] | None = None) -> int:
         return 1
 
     print("─" * 72)
-    print(f" 📈 RESUMEN GENERAL ({metrics.query_scope_label.upper()})")
+    print(f" 📈 RESUMEN GENERAL ({metrics.group_by_label.upper()} — {metrics.query_scope_label.upper()})")
     print("─" * 72)
-    print(f"  • Configuraciones evaluadas : {metrics.total_configurations} "
-          f"(fb_docs={metrics.fb_docs_values} × fb_terms={metrics.fb_terms_values})")
+    print(f"  • Corridas evaluadas        : {metrics.total_configurations}")
+    print(f"  • Modelos LLM               : {metrics.llm_models}")
+    print(f"  • Configuraciones (k × m)   : k={metrics.fb_docs_values} × m={metrics.fb_terms_values}")
     print(f"  • Línea base MRR@10 BM25    : {metrics.mrr_bm25_baseline:.4f}")
-    print(f"  • Mejor config RAG (LLM)    : fb_docs={metrics.best_rag_config['fb_docs']}, "
-          f"fb_terms={metrics.best_rag_config['fb_terms']} → "
+    print(f"  • Mejor resultado LLM       : model={metrics.best_rag_config['llm_model']} "
+          f"(k={metrics.best_rag_config['fb_docs']}, m={metrics.best_rag_config['fb_terms']}) → "
           f"MRR@10={metrics.best_rag_config['mrr']:.4f} "
           f"({metrics.best_rag_config['time_avg']:.4f} s/query)")
-    print(f"  • Mejor config PRF          : fb_docs={metrics.best_prf_config['fb_docs']}, "
-          f"fb_terms={metrics.best_prf_config['fb_terms']} → "
+    print(f"  • Mejor resultado PRF       : k={metrics.best_prf_config['fb_docs']}, "
+          f"m={metrics.best_prf_config['fb_terms']} → "
           f"MRR@10={metrics.best_prf_config['mrr']:.4f} "
           f"({metrics.best_prf_config['time_avg']:.4f} s/query)")
-    print(f"  • Escalamiento lineal LLM   : T(fb_docs) ≈ {metrics.linear_fit_slope_sec_per_doc:.4f}·fb_docs "
-          f"+ {metrics.linear_fit_intercept_sec:.4f} s  (R² = {metrics.linear_fit_r2:.4f})")
+    if metrics.linear_fit_slope_sec_per_doc > 0:
+        print(f"  • Escalamiento lineal LLM   : T(k) ≈ {metrics.linear_fit_slope_sec_per_doc:.4f}·k "
+              f"+ {metrics.linear_fit_intercept_sec:.4f} s  (R² = {metrics.linear_fit_r2:.4f})")
     if metrics.fallback_configs:
         print(f"  • Nota (celdas 'TODAS' vacías en CSV, usando valor 'Solo expandidas'): "
               f"{', '.join(metrics.fallback_configs)}")
@@ -441,4 +499,3 @@ def main(argv: list[str] | None = None) -> int:
 
 if __name__ == "__main__":
     sys.exit(main())
-

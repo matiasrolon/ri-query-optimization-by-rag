@@ -614,9 +614,9 @@ def generate_all_plots(
         f.write(f"      - MRR@10 RAG (todas)                      : {metrics.mrr_rag_all_mean:.4f} ({metrics.rag_query_count:,} queries)\n")
         f.write(f"      - MRR@10 PRF (todas)                      : {metrics.mrr_prf_all_mean:.4f} ({metrics.prf_query_count:,} queries)\n")
         f.write(f"      - Diferencia (Δ RAG − PRF)                : {metrics.mrr_diff_all:+.4f} ({metrics.mrr_relative_gain_all_pct:+.2f}% relativo)\n")
-        f.write("  [B] Solo consultas expandidas (excluyendo sin cambios):\n")
-        f.write(f"      - MRR@10 RAG (solo expandidas)            : {metrics.mrr_rag_expanded_mean:.4f} ({metrics.rag_expanded_count:,} queries)\n")
-        f.write(f"      - MRR@10 PRF (solo expandidas)            : {metrics.mrr_prf_expanded_mean:.4f} ({metrics.prf_expanded_count:,} queries)\n")
+        f.write("  [B] Solo consultas expandidas por RAG/LLM (comparación pareada sobre las mismas consultas):\n")
+        f.write(f"      - MRR@10 RAG (sobre expandidas RAG)       : {metrics.mrr_rag_expanded_mean:.4f} ({metrics.rag_expanded_count:,} queries)\n")
+        f.write(f"      - MRR@10 PRF (sobre expandidas RAG)       : {metrics.mrr_prf_expanded_mean:.4f} ({metrics.rag_expanded_count:,} queries)\n")
         f.write(f"      - Diferencia (Δ RAG − PRF)                : {metrics.mrr_diff_expanded:+.4f} ({metrics.mrr_relative_gain_expanded_pct:+.2f}% relativo)\n\n")
 
         f.write("── 2. GANANCIAS Y PÉRDIDAS POR CONSULTA ───────────────────────────────\n")

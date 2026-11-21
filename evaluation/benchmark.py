@@ -634,10 +634,28 @@ def run_benchmark(
         if r.get("n_terms_kept", 0) > 0
         and r.get("mrr") is not None and r["mrr"] != "" and not (isinstance(r["mrr"], float) and math.isnan(r["mrr"]))
     ]
+    rag_expanded_qids = {
+        str(r["queryid"])
+        for r in rag_results
+        if r.get("n_terms_kept", 0) > 0
+        and r.get("mrr") is not None and r["mrr"] != "" and not (isinstance(r["mrr"], float) and math.isnan(r["mrr"]))
+    }
     n_expanded_rag = len(rag_expanded_mrrs)
     n_unchanged_rag = n_total_rag - n_expanded_rag
     rag_mrr_all = sum(rag_all_mrrs) / len(rag_all_mrrs) if rag_all_mrrs else 0.0
     rag_mrr_expanded = sum(rag_expanded_mrrs) / n_expanded_rag if n_expanded_rag else 0.0
+
+    # Compute PRF MRR@10 over the exact same subset of queries expanded by RAG
+    prf_on_rag_expanded_mrrs = [
+        r["mrr"] for r in prf_results
+        if str(r["queryid"]) in rag_expanded_qids
+        and r.get("mrr") is not None and r["mrr"] != "" and not (isinstance(r["mrr"], float) and math.isnan(r["mrr"]))
+    ]
+    prf_mrr_on_rag_expanded = (
+        sum(prf_on_rag_expanded_mrrs) / len(prf_on_rag_expanded_mrrs)
+        if prf_on_rag_expanded_mrrs
+        else 0.0
+    )
 
     print(f"\n   RAG completado: {n_total_rag} queries en {rag_time:.1f}s (promedio: {rag_time_avg:.4f}s/query)")
     print(f"   Queries expandidas con éxito : {n_expanded_rag}/{n_total_rag} ({n_unchanged_rag} sin expandir)")
@@ -651,16 +669,16 @@ def run_benchmark(
     print("=" * 65)
     print("✅ Benchmark finalizado")
     print("=" * 65)
-    print(f"   Queries evaluadas                             : {len(queries_with_qrels)}")
-    print(f"   MRR@10 promedio BM25                          : {bm25_mrr_avg:.4f}")
-    print(f"   MRR@10 promedio PRF (todas las consultas)     : {prf_mrr_all:.4f} ({n_total_prf} queries)")
-    print(f"   MRR@10 promedio PRF (solo queries expandidas) : {prf_mrr_expanded:.4f} ({n_expanded_prf} expandidas; {n_unchanged_prf} sin expandir)")
-    print(f"   MRR@10 promedio RAG (todas las consultas)     : {rag_mrr_all:.4f} ({n_total_rag} queries)")
-    print(f"   MRR@10 promedio RAG (solo queries expandidas) : {rag_mrr_expanded:.4f} ({n_expanded_rag} expandidas; {n_unchanged_rag} sin expandir)")
-    print(f"   Tiempo BM25 (total / promedio por consulta)   : {bm25_time:.1f}s / {bm25_time_avg:.4f}s")
-    print(f"   Tiempo PRF  (total / promedio por consulta)   : {prf_time:.1f}s / {prf_time_avg:.4f}s")
-    print(f"   Tiempo RAG  (total / promedio por consulta)   : {rag_time:.1f}s / {rag_time_avg:.4f}s")
-    print(f"   CSV exportado a                               : {output_path}")
+    print(f"   Queries evaluadas                                    : {len(queries_with_qrels)}")
+    print(f"   MRR@10 promedio BM25                                 : {bm25_mrr_avg:.4f}")
+    print(f"   MRR@10 promedio PRF (todas las consultas)            : {prf_mrr_all:.4f} ({n_total_prf} queries)")
+    print(f"   MRR@10 promedio RAG (todas las consultas)            : {rag_mrr_all:.4f} ({n_total_rag} queries)")
+    print(f"   MRR@10 promedio PRF (sobre {n_expanded_rag} expandidas por RAG) : {prf_mrr_on_rag_expanded:.4f} ({n_unchanged_rag} sin expandir en RAG excluidas)")
+    print(f"   MRR@10 promedio RAG (sobre {n_expanded_rag} expandidas por RAG) : {rag_mrr_expanded:.4f} ({n_unchanged_rag} sin expandir en RAG excluidas)")
+    print(f"   Tiempo BM25 (total / promedio por consulta)          : {bm25_time:.1f}s / {bm25_time_avg:.4f}s")
+    print(f"   Tiempo PRF  (total / promedio por consulta)          : {prf_time:.1f}s / {prf_time_avg:.4f}s")
+    print(f"   Tiempo RAG  (total / promedio por consulta)          : {rag_time:.1f}s / {rag_time_avg:.4f}s")
+    print(f"   CSV exportado a                                      : {output_path}")
     print()
 
     return output_path

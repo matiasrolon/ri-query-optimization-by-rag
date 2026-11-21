@@ -241,9 +241,13 @@ class BenchmarkAnalyzer:
             self._prf_df.loc[missing_prf, "mrr_all"] = (
                 self._prf_df.loc[missing_prf, "queryid"].map(bm25_mrr_map)
             )
+        # Filter PRF expanded MRR to the exact same queryids that RAG expanded
+        # so both methods are compared over the identical query subset.
+        rag_expanded_qids = set(
+            self._rag_df.loc[self._rag_df["mrr_expanded"].notna(), "queryid"]
+        )
         self._prf_df["mrr_expanded"] = self._prf_df["mrr_all"].copy()
-        if "n_terms_kept" in self._prf_df.columns:
-            self._prf_df.loc[self._prf_df["n_terms_kept"].fillna(0) <= 0, "mrr_expanded"] = np.nan
+        self._prf_df.loc[~self._prf_df["queryid"].isin(rag_expanded_qids), "mrr_expanded"] = np.nan
 
         # In RAG, queries where n_terms_kept == 0 stayed as the original query
         # and should be excluded from expanded-only gain/loss evaluation
@@ -449,7 +453,10 @@ class BenchmarkAnalyzer:
 
         rag_exp_count = int(len(rag_exp_s))
         rag_unexp_count = int(len(self._rag_df) - rag_exp_count)
-        prf_exp_count = int(len(prf_exp_s))
+        if "n_terms_kept" in self._prf_df.columns:
+            prf_exp_count = int((self._prf_df["n_terms_kept"].fillna(0) > 0).sum())
+        else:
+            prf_exp_count = int(len(prf_exp_s))
         prf_unexp_count = int(len(self._prf_df) - prf_exp_count)
 
         mrr_diff_all = mrr_rag_all - mrr_prf_all
@@ -459,7 +466,7 @@ class BenchmarkAnalyzer:
         mrr_gain_exp_pct = (mrr_diff_exp / mrr_prf_exp * 100.0) if mrr_prf_exp > 0 else 0.0
 
         mrr_rag = mrr_rag_exp
-        mrr_prf = mrr_prf_all
+        mrr_prf = mrr_prf_exp
         mrr_diff = mrr_rag - mrr_prf
         mrr_gain_pct = ((mrr_diff) / mrr_prf * 100.0) if mrr_prf > 0 else 0.0
 

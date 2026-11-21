@@ -84,20 +84,22 @@ output/                                   ← generado automáticamente por el p
     │   ├── 05_llm_attempts_bar.png
     │   ├── summary_metrics.json
     │   └── summary_report.txt
-    ├── summary_todas/                    ← análisis general (todas las consultas)
+    ├── summary_all/                      ← análisis general (todas las consultas)
     │   ├── 01_mrr_vs_fb_terms.png
     │   ├── 02_mrr_vs_fb_docs.png
     │   ├── 03_effectiveness_vs_cost.png
     │   ├── 04_inference_time_vs_fb_docs.png
     │   ├── summary_general_metrics.json
     │   └── summary_general_report.txt
-    └── summary_solo_expandidas/          ← análisis general (solo consultas expandidas)
-        ├── 01_mrr_vs_fb_terms.png
-        ├── 02_mrr_vs_fb_docs.png
-        ├── 03_effectiveness_vs_cost.png
-        ├── 04_inference_time_vs_fb_docs.png
-        ├── summary_general_metrics.json
-        └── summary_general_report.txt
+    ├── summary_expanded/                 ← análisis general (solo consultas expandidas)
+    │   ├── 01_mrr_vs_fb_terms.png
+    │   ├── 02_mrr_vs_fb_docs.png
+    │   ├── 03_effectiveness_vs_cost.png
+    │   ├── 04_inference_time_vs_fb_docs.png
+    │   ├── summary_general_metrics.json
+    │   └── summary_general_report.txt
+    ├── summary_models_all/               ← análisis por modelo LLM (todas las consultas)
+    └── summary_models_expanded/          ← análisis por modelo LLM (solo expandidas)
 ```
 
 ## Instalación
@@ -233,30 +235,32 @@ python -m analysis --file "/ruta/a/benchmark_results_<timestamp>.csv"
 
 ### 2. Análisis general multi-corrida (`analyzer_summary`)
 
-Procesa una tabla CSV resumen con múltiples configuraciones de hiperparámetros (`FEEDBACK_DOCS` $\times$ `FEEDBACK_TERMS`, por defecto en `./data/benchmark_summary.csv`) y permite elegir si calcular los gráficos con las columnas de **"Todas las consultas"** (valor por defecto) o **"Solo expandidas"**.
+Procesa una tabla CSV resumen con múltiples configuraciones de hiperparámetros (`FEEDBACK_DOCS` $\times$ `FEEDBACK_TERMS`, por defecto en `./data/benchmark_summary.csv`) o con múltiples modelos de lenguaje (`./data/benchmark_summary_models.csv`), permitiendo elegir:
+- **Por qué parámetro discriminar** (`--group-by config` por defecto, o `--group-by model` para discriminar por la columna `LLM Model`).
+- **Qué conjunto de consultas utilizar** (`--queries all` por defecto, o `--queries expanded`).
 
 ```bash
-# Ejecutar análisis general con todas las consultas (por defecto)
-python analyzer_summary.py --file data/benchmark_summary.csv
+# 1. Discriminar por configuración de hiperparámetros (k, m) — por defecto
+python analyzer_summary.py --file data/benchmark_summary.csv --group-by config --queries all
+python analyzer_summary.py --file data/benchmark_summary.csv --group-by config --queries expanded
 
-# Ejecutar explícitamente con todas las consultas
-python analyzer_summary.py --file data/benchmark_summary.csv --queries all
-
-# Ejecutar solo con las consultas expandidas
-python analyzer_summary.py --file data/benchmark_summary.csv --queries expanded
+# 2. Discriminar por nombre de modelo de lenguaje (columna LLM Model)
+python analyzer_summary.py --file data/benchmark_summary_models.csv --group-by model --queries all
+python analyzer_summary.py --file data/benchmark_summary_models.csv --group-by model --queries expanded
 
 # También disponible como módulo de Python:
-python -m analysis.analyzer_summary --file data/benchmark_summary.csv --queries all
+python -m analysis.analyzer_summary --file data/benchmark_summary_models.csv --group-by model --queries all
 ```
 
 #### Parámetros de `analyzer_summary`
 
 
-| Parámetro           | Descripción                                                                                                    | Valor por defecto                                              |
-| -------------------- | --------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------- |
-| `--file`, `-f`       | Ruta al archivo CSV de resumen general multi-corrida                                                            | `data/benchmark_summary.csv`                                   |
-| `--queries`, `-q`    | Conjunto de consultas para calcular MRR@10:`all` (todas las consultas) o `expanded` (solo consultas expandidas) | `all`                                                          |
-| `--output-dir`, `-o` | Directorio de salida para los gráficos y reportes                                                              | `output/figures/summary_todas/` (o `summary_solo_expandidas/`) |
+| Parámetro           | Descripción                                                                                                     | Valor por defecto                                              |
+| -------------------- | ---------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------- |
+| `--file`, `-f`       | Ruta al archivo CSV de resumen general multi-corrida                                                             | `data/benchmark_summary.csv`                                   |
+| `--group-by`, `-g`   | Parámetro por el cual discriminar en los gráficos: `config` (`FEEDBACK_DOCS`/`FEEDBACK_TERMS`) o `model` (`LLM Model`) | `config`                                                       |
+| `--queries`, `-q`    | Conjunto de consultas para calcular MRR@10: `all` (todas las consultas) o `expanded` (solo consultas expandidas) | `all`                                                          |
+| `--output-dir`, `-o` | Directorio de salida para los gráficos y reportes                                                               | `output/figures/summary_all/` (o `summary_expanded/`, `summary_models_all/`, `summary_models_expanded/`) |
 
 #### Gráficos y reportes generados (`output/figures/summary_<modo>/`)
 
