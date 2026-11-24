@@ -211,6 +211,85 @@ def plot_gain_loss_donut(
     return _save_figure(fig, output_dir, "01b_gain_loss_donut")
 
 
+# ── Chart 1c: Gain / Loss Histogram by ΔRR Range (Excluding Neutral) ──────────
+def plot_gain_loss_histogram(
+    analyzer: BenchmarkAnalyzer,
+    metrics: AnalysisMetrics,
+    output_dir: str
+) -> str:
+    """
+    Generate Chart 1c: Histogram of non-neutral queries grouped into 10 negative
+    and 10 positive ΔRR ranges (10% steps from -100% to +100%), with concrete
+    query counts annotated above each bar.
+    """
+    _apply_plot_style()
+    merged = analyzer.merged_df.dropna(subset=["delta_rr"])
+    delta = merged["delta_rr"].to_numpy()
+
+    eps = 1e-7
+    neg_mags = -delta[delta < -eps]
+    pos_mags = delta[delta > eps]
+
+    # 10 magnitude intervals: (0.0, 0.1], (0.1, 0.2], ..., (0.9, 1.0]
+    neg_counts = []
+    pos_counts = []
+    for i in range(1, 11):
+        low = (i - 1) * 0.1 + (eps if i > 1 else 0.0)
+        high = i * 0.1 + eps
+        neg_counts.append(int(np.sum((neg_mags > low) & (neg_mags <= high))))
+        pos_counts.append(int(np.sum((pos_mags > low) & (pos_mags <= high))))
+
+    # Order from -100%..-10% then +10%..+100%
+    neg_counts_ordered = list(reversed(neg_counts))
+    counts = neg_counts_ordered + pos_counts
+    labels = [f"-{i * 10}%" for i in range(10, 0, -1)] + [f"+{i * 10}%" for i in range(1, 11)]
+    colors = [PALETTE["loss"]] * 10 + [PALETTE["gain"]] * 10
+
+    fig, ax = plt.subplots(figsize=(5.4, 2.5))
+    x = np.arange(len(counts))
+    bars = ax.bar(x, counts, width=0.76, color=colors, edgecolor="white", linewidth=0.6)
+
+    max_count = max(counts) if counts and max(counts) > 0 else 1
+    y_offset = max_count * 0.02
+    ax.set_ylim(0, max_count * 1.22)
+
+    for idx, (bar, count) in enumerate(zip(bars, counts)):
+        if count > 0:
+            bar_color = PALETTE["loss"] if idx < 10 else PALETTE["gain"]
+            ax.text(
+                bar.get_x() + bar.get_width() / 2.0,
+                bar.get_height() + y_offset,
+                f"{count:,}",
+                ha="center",
+                va="bottom",
+                fontsize=6.3,
+                fontweight="bold",
+                color=bar_color,
+            )
+
+    ax.axvline(9.5, color="#334155", linestyle="--", linewidth=0.9, alpha=0.8)
+    ax.set_xticks(x)
+    ax.set_xticklabels(labels, rotation=45, ha="right", fontsize=7.0)
+    ax.set_xlabel(r"Rango de variación $\Delta$RR ($RR_{\mathrm{LLM}} - RR_{\mathrm{PRF}}$)")
+    ax.set_ylabel("N° Consultas")
+    ax.grid(axis="y", linestyle="--", alpha=0.3, linewidth=0.5)
+    ax.grid(axis="x", visible=False)
+
+    legend_handles = [
+        Patch(facecolor=PALETTE["loss"], edgecolor="none", label=f"Degradadas ({sum(neg_counts_ordered):,})"),
+        Patch(facecolor=PALETTE["gain"], edgecolor="none", label=f"Mejoradas ({sum(pos_counts):,})"),
+    ]
+    ax.legend(
+        handles=legend_handles,
+        loc="upper right",
+        frameon=False,
+        fontsize=7.2,
+        handlelength=1.0,
+    )
+
+    return _save_figure(fig, output_dir, "01c_gain_loss_histogram")
+
+
 # ── Chart 2: Time Breakdown with Combined Times and Percentages ────────────────
 def plot_time_breakdown(
     analyzer: BenchmarkAnalyzer,
@@ -585,6 +664,7 @@ def generate_all_plots(
     fig_paths = {}
     fig_paths["gain_loss"] = plot_gain_loss_per_query(analyzer, metrics, output_dir)
     fig_paths["gain_loss_donut"] = plot_gain_loss_donut(analyzer, metrics, output_dir)
+    fig_paths["gain_loss_histogram"] = plot_gain_loss_histogram(analyzer, metrics, output_dir)
     fig_paths["time_breakdown"] = plot_time_breakdown(analyzer, metrics, output_dir)
     fig_paths["lexicon_filtering"] = plot_lexicon_filtering_donut(analyzer, metrics, output_dir)
     fig_paths["terms_distribution"] = plot_terms_distribution(analyzer, metrics, output_dir)

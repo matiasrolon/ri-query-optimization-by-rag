@@ -78,6 +78,7 @@ output/                                   ← generado automáticamente por el p
     ├── benchmark_results_<timestamp>/    ← análisis de una corrida particular
     │   ├── 01_gain_loss_per_query.png
     │   ├── 01b_gain_loss_donut.png
+    │   ├── 01c_gain_loss_histogram.png
     │   ├── 02_time_breakdown_stacked.png
     │   ├── 03_lexicon_filtering_donut.png
     │   ├── 04_terms_distribution_per_query.png
@@ -225,11 +226,12 @@ python -m analysis --file "/ruta/a/benchmark_results_<timestamp>.csv"
 
 1. **`01_gain_loss_per_query.png`**: Perfil continuo de ganancias y pérdidas por consulta ordenado por $\Delta(q) = RR_{LLM}(q) - RR_{PRF}(q)$, indicando entre paréntesis la cantidad concreta de consultas mejoradas, neutras y degradadas.
 2. **`01b_gain_loss_donut.png`**: Gráfico de anillo con la proporción porcentual de consultas mejoradas, neutras y degradadas y el balance neto.
-3. **`02_time_breakdown_stacked.png`**: Desglose porcentual y absoluto de tiempos de ejecución (1ª pasada BM25, obtención de texto, inferencia LLM y 2ª pasada).
-4. **`03_lexicon_filtering_donut.png`**: Proporción de términos propuestos por el LLM aceptados vs. rechazados (alucinación fuera del lexicón, duplicados, palabras vacías y truncados).
-5. **`04_terms_distribution_per_query.png`**: Distribución de cantidad de términos propuestos y aceptados por consulta.
-6. **`05_llm_attempts_bar.png`**: Distribución de intentos de expansión del LLM (1, 2 o 3 intentos) y excesos de tiempo límite.
-7. **`summary_metrics.json`** y **`summary_report.txt`**: Reporte detallado con MRR@10 (calculado tanto sobre **todas las consultas** como **solo sobre consultas expandidas** para PRF y LLM), tiempos totales y tiempos promedio por consulta.
+3. **`01c_gain_loss_histogram.png`**: Histograma por rangos de variación $\Delta RR$ (en intervalos de 10% desde $-100\%$ hasta $+100\%$, excluyendo las consultas neutras), con la cantidad concreta de consultas sobre cada barra.
+4. **`02_time_breakdown_stacked.png`**: Desglose porcentual y absoluto de tiempos de ejecución (1ª pasada BM25, obtención de texto, inferencia LLM y 2ª pasada).
+5. **`03_lexicon_filtering_donut.png`**: Proporción de términos propuestos por el LLM aceptados vs. rechazados (alucinación fuera del lexicón, duplicados, palabras vacías y truncados).
+6. **`04_terms_distribution_per_query.png`**: Distribución de cantidad de términos propuestos y aceptados por consulta.
+7. **`05_llm_attempts_bar.png`**: Distribución de intentos de expansión del LLM (1, 2 o 3 intentos) y excesos de tiempo límite.
+8. **`summary_metrics.json`** y **`summary_report.txt`**: Reporte detallado con MRR@10 (calculado tanto sobre **todas las consultas** como **solo sobre consultas expandidas** para PRF y LLM), tiempos totales y tiempos promedio por consulta.
 
 ---
 
